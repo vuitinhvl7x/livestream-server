@@ -1,13 +1,26 @@
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 import User from "../models/user.js";
+
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user.id, username: user.username },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "1h",
+    }
+  );
+};
 
 export const registerUser = async (username, password) => {
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    return await User.create({
+    const user = await User.create({
       username,
       password: hashedPassword,
     });
+    const token = generateToken(user);
+    return { user, token };
   } catch (error) {
     throw new Error("Error registering user: " + error.message);
   }
@@ -25,7 +38,8 @@ export const loginUser = async (username, password) => {
       throw new Error("Invalid password");
     }
 
-    return user;
+    const token = generateToken(user);
+    return { user, token };
   } catch (error) {
     throw new Error("Error logging in: " + error.message);
   }
