@@ -1,23 +1,23 @@
 {
   "development": {
-    "username": "",
-    "password": "",
-    "database": "",
-    "host": "",
+    "username": "postgres",
+    "password": "201041",
+    "database": "livestream",
+    "host": "localhost",
     "dialect": "postgres"
   },
   "test": {
-    "username": "",
-    "password": "",
-    "database": "",
-    "host": "",
+    "username": "postgres",
+    "password": "201041",
+    "database": "livestream_test",
+    "host": "localhost",
     "dialect": "postgres"
   },
   "production": {
-    "username": "",
-    "password": "",
-    "database": "",
-    "host": "",
+    "username": "postgres",
+    "password": "201041",
+    "database": "livestream_production",
+    "host": "localhost",
     "dialect": "postgres"
   }
 }

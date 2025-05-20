@@ -39,6 +39,7 @@ The content is organized as follows:
 # Directory Structure
 ```
 migrations/20250518153005-create-users.js
+migrations/20250520140244-create-streams.js
 migrations/create-users.js
 models/index.js
 src/config/database.js
@@ -50,6 +51,32 @@ src/services/userService.js
 ```
 
 # Files
+
+## File: migrations/20250520140244-create-streams.js
+```javascript
+'use strict';
+
+/** @type {import('sequelize-cli').Migration} */
+module.exports = {
+  async up (queryInterface, Sequelize) {
+    /**
+     * Add altering commands here.
+     *
+     * Example:
+     * await queryInterface.createTable('users', { id: Sequelize.INTEGER });
+     */
+  },
+
+  async down (queryInterface, Sequelize) {
+    /**
+     * Add reverting commands here.
+     *
+     * Example:
+     * await queryInterface.dropTable('users');
+     */
+  }
+};
+```
 
 ## File: migrations/20250518153005-create-users.js
 ```javascript
@@ -114,157 +141,6 @@ module.exports = {
   async down(queryInterface, Sequelize) {
     await queryInterface.dropTable("Users");
   },
-};
-```
-
-## File: models/index.js
-```javascript
-'use strict';
-
-const fs = require('fs');
-const path = require('path');
-const Sequelize = require('sequelize');
-const process = require('process');
-const basename = path.basename(__filename);
-const env = process.env.NODE_ENV || 'development';
-const config = require(__dirname + '/../config/config.json')[env];
-const db = {};
-
-let sequelize;
-if (config.use_env_variable) {
-  sequelize = new Sequelize(process.env[config.use_env_variable], config);
-} else {
-  sequelize = new Sequelize(config.database, config.username, config.password, config);
-}
-
-fs
-  .readdirSync(__dirname)
-  .filter(file => {
-    return (
-      file.indexOf('.') !== 0 &&
-      file !== basename &&
-      file.slice(-3) === '.js' &&
-      file.indexOf('.test.js') === -1
-    );
-  })
-  .forEach(file => {
-    const model = require(path.join(__dirname, file))(sequelize, Sequelize.DataTypes);
-    db[model.name] = model;
-  });
-
-Object.keys(db).forEach(modelName => {
-  if (db[modelName].associate) {
-    db[modelName].associate(db);
-  }
-});
-
-db.sequelize = sequelize;
-db.Sequelize = Sequelize;
-
-module.exports = db;
-```
-
-## File: src/config/database.js
-```javascript
-import { Sequelize } from "sequelize";
-import fs from "fs";
-import path from "path";
-
-// Determine the environment
-const env = process.env.NODE_ENV || "development";
-
-// Construct the path to config.json
-// Assuming the script is run from the project root or src, and config.json is in config/
-let configPath;
-if (fs.existsSync(path.join(process.cwd(), "config", "config.json"))) {
-  configPath = path.join(process.cwd(), "config", "config.json");
-} else if (
-  fs.existsSync(path.join(process.cwd(), "..", "config", "config.json"))
-) {
-  // If run from src/
-  configPath = path.join(process.cwd(), "..", "config", "config.json");
-} else {
-  throw new Error("Could not find config/config.json. CWD: " + process.cwd());
-}
-
-// Read and parse config.json
-const configFile = fs.readFileSync(configPath, "utf8");
-const config = JSON.parse(configFile)[env];
-
-if (!config || !config.dialect) {
-  throw new Error(
-    `Database configuration for environment '${env}' not found or dialect is missing in config/config.json`
-  );
-}
-
-const sequelize = new Sequelize(
-  config.database,
-  config.username,
-  config.password,
-  {
-    host: config.host,
-    dialect: config.dialect,
-    logging: false, // Set to console.log to see SQL queries
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
-  }
-);
-
-export default sequelize;
-```
-
-## File: src/controllers/userController.js
-```javascript
-import { validationResult } from "express-validator";
-import { registerUser, loginUser } from "../services/userService.js";
-
-export const register = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-    const user = await registerUser(username, password);
-
-    res.status(201).json({
-      message: "User registered successfully",
-      user: {
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-export const login = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-    const user = await loginUser(username, password);
-
-    res.status(200).json({
-      message: "Login successful",
-      user: {
-        id: user.id,
-        username: user.username,
-      },
-    });
-  } catch (error) {
-    res.status(401).json({ error: error.message });
-  }
 };
 ```
 
@@ -363,18 +239,199 @@ router.post("/login", validateUser, login);
 export default router;
 ```
 
+## File: models/index.js
+```javascript
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const Sequelize = require('sequelize');
+const process = require('process');
+const basename = path.basename(__filename);
+const env = process.env.NODE_ENV || 'development';
+const config = require(__dirname + '/../config/config.json')[env];
+const db = {};
+const dotenv = require('dotenv');
+dotenv.config();
+
+let sequelize;
+sequelize = new Sequelize(
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASS,
+  {
+    host: process.env.DB_HOST,
+    dialect: config.dialect,
+    logging: false,
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000,
+    },
+  }
+);
+
+fs
+  .readdirSync(__dirname)
+  .filter(file => {
+    return (
+      file.indexOf('.') !== 0 &&
+      file !== basename &&
+      file.slice(-3) === '.js' &&
+      file.indexOf('.test.js') === -1
+    );
+  })
+  .forEach(file => {
+    const model = require(path.join(__dirname, file))(sequelize, Sequelize.DataTypes);
+    db[model.name] = model;
+  });
+
+Object.keys(db).forEach(modelName => {
+  if (db[modelName].associate) {
+    db[modelName].associate(db);
+  }
+});
+
+db.sequelize = sequelize;
+db.Sequelize = Sequelize;
+
+module.exports = db;
+```
+
+## File: src/config/database.js
+```javascript
+import { Sequelize } from "sequelize";
+import fs from "fs";
+import path from "path";
+import dotenv from "dotenv";
+dotenv.config();
+
+// Determine the environment
+const env = process.env.NODE_ENV || "development";
+
+// Construct the path to config.json
+// Assuming the script is run from the project root or src, and config.json is in config/
+let configPath;
+if (fs.existsSync(path.join(process.cwd(), "config", "config.json"))) {
+  configPath = path.join(process.cwd(), "config", "config.json");
+} else if (
+  fs.existsSync(path.join(process.cwd(), "..", "config", "config.json"))
+) {
+  // If run from src/
+  configPath = path.join(process.cwd(), "..", "config", "config.json");
+} else {
+  throw new Error("Could not find config/config.json. CWD: " + process.cwd());
+}
+
+// Read and parse config.json
+const configFile = fs.readFileSync(configPath, "utf8");
+const config = JSON.parse(configFile)[env];
+
+if (!config || !config.dialect) {
+  throw new Error(
+    `Database configuration for environment '${env}' not found or dialect is missing in config/config.json`
+  );
+}
+
+const sequelize = new Sequelize(
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASS,
+  {
+    host: process.env.DB_HOST,
+    dialect: config.dialect,
+    logging: false, // Set to console.log to see SQL queries
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000,
+    },
+  }
+);
+
+export default sequelize;
+```
+
+## File: src/controllers/userController.js
+```javascript
+import { validationResult } from "express-validator";
+import { registerUser, loginUser } from "../services/userService.js";
+
+export const register = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const { user, token } = await registerUser(username, password);
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: user.id,
+        username: user.username,
+        createdAt: user.createdAt,
+      },
+      token,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const login = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const { user, token } = await loginUser(username, password);
+
+    res.status(200).json({
+      message: "Login successful",
+      user: {
+        id: user.id,
+        username: user.username,
+      },
+      token,
+    });
+  } catch (error) {
+    res.status(401).json({ error: error.message });
+  }
+};
+```
+
 ## File: src/services/userService.js
 ```javascript
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 import User from "../models/user.js";
+
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user.id, username: user.username },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "1h",
+    }
+  );
+};
 
 export const registerUser = async (username, password) => {
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    return await User.create({
+    const user = await User.create({
       username,
       password: hashedPassword,
     });
+    const token = generateToken(user);
+    return { user, token };
   } catch (error) {
     throw new Error("Error registering user: " + error.message);
   }
@@ -392,7 +449,8 @@ export const loginUser = async (username, password) => {
       throw new Error("Invalid password");
     }
 
-    return user;
+    const token = generateToken(user);
+    return { user, token };
   } catch (error) {
     throw new Error("Error logging in: " + error.message);
   }

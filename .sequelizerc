@@ -1,4 +1,5 @@
 const path = require("path");
+require("dotenv").config(); // Load .env từ thư mục hiện tại (server)
 
 module.exports = {
   config: path.resolve("config", "config.json"),
