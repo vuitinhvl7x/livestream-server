@@ -140,3 +140,4 @@ dist
 task*.md
 config.json
 .cursor
+roadmap.md
