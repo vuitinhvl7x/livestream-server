@@ -1,6 +1,8 @@
 import { Sequelize } from "sequelize";
 import fs from "fs";
 import path from "path";
+import dotenv from "dotenv";
+dotenv.config();
 
 // Determine the environment
 const env = process.env.NODE_ENV || "development";
@@ -30,11 +32,11 @@ if (!config || !config.dialect) {
 }
 
 const sequelize = new Sequelize(
-  config.database,
-  config.username,
-  config.password,
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASS,
   {
-    host: config.host,
+    host: process.env.DB_HOST,
     dialect: config.dialect,
     logging: false, // Set to console.log to see SQL queries
     pool: {
