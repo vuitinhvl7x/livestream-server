@@ -141,3 +141,4 @@ task*.md
 config.json
 .cursor
 roadmap.md
+nginx.conf

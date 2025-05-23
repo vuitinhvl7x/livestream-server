@@ -49,3 +49,17 @@ const authenticateToken = (req, res, next) => {
 };
 
 export default authenticateToken;
+
+export function verifyWebhook(req, res, next) {
+  const signature = req.headers["x-webhook-signature"];
+  // Giả sử bạn sẽ lưu WEBHOOK_SECRET trong file .env
+  if (!process.env.WEBHOOK_SECRET) {
+    console.error("FATAL ERROR: WEBHOOK_SECRET is not defined in .env file.");
+    return res.status(500).json({ message: "Webhook secret not configured." });
+  }
+  if (signature !== process.env.WEBHOOK_SECRET) {
+    console.warn("Invalid webhook signature received:", signature);
+    return res.status(401).json({ message: "Invalid webhook signature." });
+  }
+  next();
+}

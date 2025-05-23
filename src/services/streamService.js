@@ -145,3 +145,64 @@ export const getStreamDetailsService = async (streamId) => {
     throw new Error("Failed to fetch stream details: " + error.message);
   }
 };
+
+/**
+ * Đánh dấu stream là live.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<void>}
+ * @throws {Error} Nếu có lỗi xảy ra.
+ */
+export const markLive = async (streamKey) => {
+  try {
+    const [updatedRows] = await Stream.update(
+      { status: "live", startTime: new Date(), endTime: null }, // endTime: null để reset nếu stream đã kết thúc trước đó
+      { where: { streamKey } }
+    );
+    if (updatedRows === 0) {
+      console.warn(
+        `markLive: Stream with key ${streamKey} not found or no change needed.`
+      );
+      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
+      // throw new Error(`Stream with key ${streamKey} not found.`);
+    }
+    console.log(`Stream ${streamKey} marked as live.`);
+  } catch (error) {
+    console.error(`Error in markLive for stream ${streamKey}:`, error);
+    throw new Error("Failed to mark stream as live: " + error.message);
+  }
+};
+
+/**
+ * Đánh dấu stream là đã kết thúc.
+ * @param {string} streamKey - Khóa của stream.
+ * @param {number} [viewerCount] - Số lượng người xem (nếu có).
+ * @returns {Promise<void>}
+ * @throws {Error} Nếu có lỗi xảy ra.
+ */
+export const markEnded = async (streamKey, viewerCount) => {
+  try {
+    const updatePayload = {
+      status: "ended",
+      endTime: new Date(),
+    };
+    if (viewerCount !== undefined && !isNaN(parseInt(viewerCount))) {
+      updatePayload.viewerCount = parseInt(viewerCount);
+    }
+
+    const [updatedRows] = await Stream.update(updatePayload, {
+      where: { streamKey },
+    });
+
+    if (updatedRows === 0) {
+      console.warn(
+        `markEnded: Stream with key ${streamKey} not found or no change needed.`
+      );
+      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
+      // throw new Error(`Stream with key ${streamKey} not found.`);
+    }
+    console.log(`Stream ${streamKey} marked as ended.`);
+  } catch (error) {
+    console.error(`Error in markEnded for stream ${streamKey}:`, error);
+    throw new Error("Failed to mark stream as ended: " + error.message);
+  }
+};

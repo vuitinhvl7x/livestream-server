@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import sequelize from "./config/database.js";
 import userRoutes from "./routes/userRoutes.js";
 import streamRoutes from "./routes/streamRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
 
 dotenv.config();
 
@@ -18,6 +19,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Routes
 app.use("/api/users", userRoutes);
 app.use("/api/streams", streamRoutes);
+app.use("/api/webhook", webhookRoutes);
 
 // Base route
 app.get("/", (req, res) => {
