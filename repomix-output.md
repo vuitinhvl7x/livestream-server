@@ -42,18 +42,24 @@ migrations/20250518153005-create-users.js
 migrations/create-users.js
 models/index.js
 src/config/database.js
+src/config/mongodb.js
+src/controllers/chatController.js
 src/controllers/streamController.js
 src/controllers/userController.js
 src/controllers/webhookController.js
 src/index.js
 src/middlewares/authMiddleware.js
+src/models/mongo/ChatMessage.js
 src/models/stream.js
 src/models/user.js
+src/routes/chatRoutes.js
 src/routes/streamRoutes.js
 src/routes/userRoutes.js
 src/routes/webhookRoutes.js
+src/services/chatService.js
 src/services/streamService.js
 src/services/userService.js
+src/socketHandlers.js
 src/validators/streamValidators.js
 src/validators/userValidators.js
 ```
@@ -123,6 +129,90 @@ module.exports = {
   async down(queryInterface, Sequelize) {
     await queryInterface.dropTable("Users");
   },
+};
+```
+
+## File: src/config/mongodb.js
+```javascript
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+export const connectMongoDB = async () => {
+  if (!MONGODB_URI) {
+    console.warn(
+      "MONGODB_URI not found in .env. Chat features requiring MongoDB will be unavailable."
+    );
+    return false; // Trả về false nếu không có URI
+  }
+
+  try {
+    await mongoose.connect(MONGODB_URI, {
+      // Các options như useNewUrlParser, useUnifiedTopology, useCreateIndex, useFindAndModify
+      // không còn cần thiết trong Mongoose 6+ và có thể gây lỗi nếu dùng.
+    });
+    console.log("MongoDB connected successfully for chat logs.");
+    return true; // Trả về true nếu kết nối thành công
+  } catch (err) {
+    console.error("MongoDB connection error:", err);
+    // Thoát ứng dụng nếu không kết nối được DB quan trọng này (tùy chọn)
+    // process.exit(1);
+    return false; // Trả về false nếu có lỗi
+  }
+};
+
+// Lắng nghe các sự kiện kết nối (tùy chọn, để debug)
+mongoose.connection.on("disconnected", () => {
+  console.log("MongoDB disconnected.");
+});
+
+mongoose.connection.on("reconnected", () => {
+  console.log("MongoDB reconnected.");
+});
+```
+
+## File: src/controllers/chatController.js
+```javascript
+import { getChatHistoryByStreamId } from "../services/chatService.js";
+
+export const getChatHistory = async (req, res) => {
+  try {
+    const { streamId } = req.params;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 50;
+    // const skip = (page - 1) * limit; // Logic skip sẽ do service xử lý
+
+    if (!streamId) {
+      return res.status(400).json({ message: "Stream ID is required." });
+    }
+    // Gọi service để lấy lịch sử chat
+    const result = await getChatHistoryByStreamId(streamId, { page, limit });
+
+    // const messages = await ChatMessage.find({ streamId })
+    //   .sort({ timestamp: -1 })
+    //   .skip(skip)
+    //   .limit(limit)
+    //   .lean();
+
+    // const totalMessages = await ChatMessage.countDocuments({ streamId });
+    // const totalPages = Math.ceil(totalMessages / limit);
+
+    res.status(200).json({
+      message: "Chat history fetched successfully",
+      data: result.messages, // Service đã reverse() nếu cần
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      totalMessages: result.totalMessages,
+    });
+  } catch (error) {
+    console.error("Error fetching chat history in controller:", error);
+    res
+      .status(500)
+      .json({ message: "Error fetching chat history", error: error.message });
+  }
 };
 ```
 
@@ -410,6 +500,42 @@ export async function handleStreamEvent(req, res) {
 }
 ```
 
+## File: src/models/mongo/ChatMessage.js
+```javascript
+import mongoose from "mongoose";
+
+const chatMessageSchema = new mongoose.Schema({
+  streamId: {
+    type: String,
+    required: true,
+    index: true, // Index để query nhanh hơn theo streamId
+  },
+  userId: {
+    type: String, // Hoặc mongoose.Schema.Types.ObjectId nếu User cũng trong Mongo và bạn muốn reference
+    required: true,
+  },
+  username: {
+    type: String,
+    required: true,
+  },
+  message: {
+    type: String,
+    required: true,
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+// Tránh lỗi OverwriteModelError nếu model đã được compile (thường xảy ra khi dùng nodemon)
+const ChatMessage =
+  mongoose.models.ChatMessage ||
+  mongoose.model("ChatMessage", chatMessageSchema);
+
+export default ChatMessage;
+```
+
 ## File: src/models/stream.js
 ```javascript
 import { DataTypes } from "sequelize";
@@ -515,6 +641,21 @@ const User = sequelize.define(
 export default User;
 ```
 
+## File: src/routes/chatRoutes.js
+```javascript
+import express from "express";
+import { getChatHistory } from "../controllers/chatController.js";
+import authenticateToken from "../middlewares/authMiddleware.js"; // API này cũng cần xác thực
+
+const router = express.Router();
+
+// GET /api/chat/:streamId/messages - Lấy lịch sử chat cho một stream
+// Client sẽ cần truyền streamId trong params và có thể page/limit trong query string
+router.get("/:streamId/messages", authenticateToken, getChatHistory);
+
+export default router;
+```
+
 ## File: src/routes/streamRoutes.js
 ```javascript
 import express from "express";
@@ -592,6 +733,209 @@ router.get("/", validateGetStreams, getStreams);
 router.get("/:streamId", validateGetStreamById, getStreamById);
 
 export default router;
+```
+
+## File: src/services/chatService.js
+```javascript
+import ChatMessage from "../models/mongo/ChatMessage.js";
+
+/**
+ * Lưu một tin nhắn chat mới vào MongoDB.
+ * @param {object} messageData - Dữ liệu tin nhắn bao gồm streamId, userId, username, message.
+ * @returns {Promise<object>} Tin nhắn đã lưu.
+ * @throws {Error} Nếu có lỗi khi lưu.
+ */
+export const saveChatMessage = async (messageData) => {
+  try {
+    // Chỉ lưu nếu MONGODB_URI được cấu hình (nghĩa là MongoDB đã kết nối)
+    if (!process.env.MONGODB_URI) {
+      console.log(
+        `Chat message from ${messageData.username} for stream ${messageData.streamId} (not saved - MongoDB not configured).`
+      );
+      // Trả về dữ liệu gốc với timestamp giả lập nếu không lưu DB
+      return { ...messageData, timestamp: new Date() };
+    }
+
+    const chatEntry = new ChatMessage(messageData);
+    await chatEntry.save();
+    console.log(
+      `Message from ${messageData.username} in room ${messageData.streamId} saved to DB.`
+    );
+    return chatEntry.toObject(); // Trả về plain object
+  } catch (error) {
+    console.error("Error saving chat message in service:", error);
+    throw new Error("Failed to save chat message: " + error.message);
+  }
+};
+
+/**
+ * Lấy lịch sử chat cho một stream cụ thể với phân trang.
+ * @param {string} streamId - ID của stream.
+ * @param {object} paginationOptions - Tùy chọn phân trang { page, limit }.
+ * @returns {Promise<object>} Bao gồm danh sách tin nhắn, tổng số trang, trang hiện tại.
+ * @throws {Error} Nếu có lỗi khi truy vấn.
+ */
+export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
+  const { page = 1, limit = 50 } = paginationOptions;
+  const skip = (page - 1) * limit;
+
+  try {
+    if (!process.env.MONGODB_URI) {
+      console.warn(
+        "Attempted to get chat history, but MONGODB_URI is not set."
+      );
+      return {
+        messages: [],
+        totalPages: 0,
+        currentPage: page,
+        totalMessages: 0,
+      };
+    }
+
+    const messages = await ChatMessage.find({ streamId })
+      .sort({ timestamp: -1 }) // Sắp xếp mới nhất lên đầu (cho query)
+      .skip(skip)
+      .limit(limit)
+      .lean(); // .lean() để trả về plain JS objects
+
+    const totalMessages = await ChatMessage.countDocuments({ streamId });
+    const totalPages = Math.ceil(totalMessages / limit);
+
+    return {
+      messages: messages.reverse(), // Đảo ngược lại để client hiển thị từ cũ -> mới
+      totalPages,
+      currentPage: page,
+      totalMessages,
+    };
+  } catch (error) {
+    console.error("Error fetching chat history in service:", error);
+    throw new Error("Failed to fetch chat history: " + error.message);
+  }
+};
+```
+
+## File: src/socketHandlers.js
+```javascript
+import jwt from "jsonwebtoken";
+// import mongoose from "mongoose"; // Không cần trực tiếp nữa
+import dotenv from "dotenv";
+import { saveChatMessage } from "./services/chatService.js"; 
+
+dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+// const MONGODB_URI = process.env.MONGODB_URI; // Không cần trực tiếp nữa
+
+// Kết nối MongoDB đã chuyển sang src/config/mongodb.js và gọi ở src/index.js
+
+// Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
+// const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
+
+const initializeSocketHandlers = (io) => {
+  // Middleware xác thực JWT cho Socket.IO
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token; // Client gửi token qua socket.handshake.auth
+    if (!token) {
+      return next(new Error("Authentication error: Token not provided"));
+    }
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+      if (err) {
+        console.error("Socket JWT verification error:", err.message);
+        return next(new Error("Authentication error: Invalid token"));
+      }
+      socket.user = decoded; // Gán thông tin user vào socket
+      next();
+    });
+  });
+
+  io.on("connection", (socket) => {
+    console.log(`User connected: ${socket.id}, UserInfo:`, socket.user);
+
+    socket.on("join_stream_room", (streamId) => {
+      if (!streamId) {
+        console.warn(
+          `User ${socket.user.username} (${socket.id}) tried to join null/undefined streamId`
+        );
+        // Có thể gửi lại lỗi cho client
+        // socket.emit('error_joining_room', { message: 'Stream ID is required.' });
+        return;
+      }
+      socket.join(streamId);
+      console.log(
+        `User ${socket.user.username} (${socket.id}) joined room: ${streamId}`
+      );
+      // Thông báo cho những người khác trong phòng (tùy chọn)
+      // socket.to(streamId).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
+    });
+
+    socket.on("chat_message", async (data) => {
+      const { streamId, message } = data;
+      if (!streamId || !message) {
+        console.warn(
+          "Received chat_message with missing streamId or message:",
+          data
+        );
+        // socket.emit('error_sending_message', { message: 'Stream ID and message are required.' });
+        return;
+      }
+
+      if (!socket.rooms.has(streamId)) {
+        console.warn(
+          `User ${socket.user.username} (${socket.id}) sent message to room ${streamId} they are not in.`
+        );
+        // Có thể join họ vào phòng nếu đó là ý đồ, hoặc báo lỗi
+        // Hoặc đơn giản là không xử lý nếu user không ở trong phòng đó
+        // socket.emit('error_sending_message', { message: \`You are not in room ${streamId}.\` });
+        return;
+      }
+
+      try {
+        // Gọi service để lưu tin nhắn
+        const savedMessage = await saveChatMessage({
+          streamId,
+          userId: socket.user.id,
+          username: socket.user.username,
+          message,
+        });
+
+        // Broadcast tin nhắn đến tất cả client trong phòng (bao gồm cả người gửi)
+        io.to(streamId).emit("new_message", {
+          userId: savedMessage.userId, // Sử dụng dữ liệu từ tin nhắn đã lưu/xử lý
+          username: savedMessage.username,
+          message: savedMessage.message,
+          timestamp: savedMessage.timestamp, // Gửi timestamp từ server (sau khi lưu)
+          streamId: savedMessage.streamId,
+        });
+      } catch (error) {
+        console.error("Error saving or broadcasting chat message:", error);
+        // Có thể gửi lỗi về cho client gửi
+        // socket.emit('error_sending_message', { message: 'Could not process your message.' });
+      }
+    });
+
+    socket.on("leave_stream_room", (streamId) => {
+      if (streamId && socket.rooms.has(streamId)) {
+        socket.leave(streamId);
+        console.log(
+          `User ${socket.user.username} (${socket.id}) left room: ${streamId}`
+        );
+        // Thông báo cho những người khác trong phòng (tùy chọn)
+        // socket.to(streamId).emit('user_left_chat', { username: socket.user.username, message: 'has left the chat.' });
+      }
+    });
+
+    socket.on("disconnect", () => {
+      console.log(
+        `User disconnected: ${socket.id}, UserInfo:`,
+        socket.user?.username
+      );
+      // Tự động rời khỏi các phòng khi ngắt kết nối
+      // Socket.IO tự xử lý việc này, nhưng bạn có thể thêm logic tùy chỉnh nếu cần
+    });
+  });
+};
+
+export default initializeSocketHandlers;
 ```
 
 ## File: src/validators/streamValidators.js
@@ -1267,52 +1611,6 @@ db.Sequelize = Sequelize;
 module.exports = db;
 ```
 
-## File: src/index.js
-```javascript
-import express from "express";
-import bodyParser from "body-parser";
-import cors from "cors";
-import dotenv from "dotenv";
-import sequelize from "./config/database.js";
-import userRoutes from "./routes/userRoutes.js";
-import streamRoutes from "./routes/streamRoutes.js";
-import webhookRoutes from "./routes/webhookRoutes.js";
-
-dotenv.config();
-
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Routes
-app.use("/api/users", userRoutes);
-app.use("/api/streams", streamRoutes);
-app.use("/api/webhook", webhookRoutes);
-
-// Base route
-app.get("/", (req, res) => {
-  res.json({ message: "Welcome to Livestream API" });
-});
-
-// Database connection and server start
-const PORT = process.env.PORT || 5000;
-
-sequelize
-  .sync()
-  .then(() => {
-    console.log("Database connected successfully.");
-    app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-    });
-  })
-  .catch((error) => {
-    console.error("Unable to connect to the database:", error);
-  });
-```
-
 ## File: src/middlewares/authMiddleware.js
 ```javascript
 import jwt from "jsonwebtoken";
@@ -1402,4 +1700,84 @@ export function verifyWebhookTokenInParam(req, res, next) {
     return res.status(403).json({ message: "Invalid webhook token." });
   }
 }
+```
+
+## File: src/index.js
+```javascript
+import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
+import dotenv from "dotenv";
+import http from "http";
+import { Server } from "socket.io";
+import sequelize from "./config/database.js";
+import { connectMongoDB } from "./config/mongodb.js";
+import userRoutes from "./routes/userRoutes.js";
+import streamRoutes from "./routes/streamRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
+// Import chat routes and handlers if they are created later
+import chatRoutes from "./routes/chatRoutes.js";
+import initializeSocketHandlers from "./socketHandlers.js";
+
+dotenv.config();
+
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.IO server
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "*",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["my-custom-header"],
+    credentials: true,
+  },
+});
+
+// Middleware
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "*",
+    credentials: true,
+  })
+);
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Routes
+app.use("/api/users", userRoutes);
+app.use("/api/streams", streamRoutes);
+app.use("/api/webhook", webhookRoutes);
+app.use("/api/chat", chatRoutes);
+
+// Base route
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Livestream API" });
+});
+
+// Database connection and server start
+const PORT = process.env.PORT || 5000;
+
+// Initialize Socket.IO handlers (example, actual implementation might differ)
+initializeSocketHandlers(io);
+
+// Kết nối cơ sở dữ liệu
+const startServer = async () => {
+  try {
+    await sequelize.sync();
+    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
+
+    await connectMongoDB(); // Kết nối MongoDB
+
+    server.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+      console.log(`Socket.IO initialized and listening on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Unable to connect to the database(s):", error);
+    process.exit(1); // Thoát nếu không kết nối được DB chính
+  }
+};
+
+startServer();
 ```

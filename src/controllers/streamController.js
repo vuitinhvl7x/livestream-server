@@ -6,8 +6,7 @@ import {
 } from "../services/streamService.js";
 import { validationResult } from "express-validator";
 import { v4 as uuidv4 } from "uuid";
-import Stream from "../models/stream.js";
-import User from "../models/user.js"; // Needed for association context, though not directly used in every function
+import { Stream, User } from "../models/index.js"; 
 
 // Endpoint Tạo Mới Stream
 export const createStream = async (req, res) => {

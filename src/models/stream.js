@@ -1,6 +1,5 @@
 import { DataTypes } from "sequelize";
 import sequelize from "../config/database.js";
-import User from "./user.js"; // Import User model for association
 
 const Stream = sequelize.define(
   "Stream",
@@ -14,7 +13,7 @@ const Stream = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: User, // Reference the User model directly
+        model: "Users", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
         key: "id",
       },
     },
@@ -25,7 +24,7 @@ const Stream = sequelize.define(
     },
     title: {
       type: DataTypes.STRING,
-      allowNull: true, // Or provide a defaultValue: 'Default Stream Title'
+      allowNull: true,
     },
     description: {
       type: DataTypes.TEXT,
@@ -59,17 +58,5 @@ const Stream = sequelize.define(
     timestamps: true, // Enable automatic createdAt and updatedAt fields
   }
 );
-
-// Define associations
-// A User can have many Streams
-User.hasMany(Stream, {
-  foreignKey: "userId",
-  as: "streams", // Optional: alias for the association
-});
-// A Stream belongs to a User
-Stream.belongsTo(User, {
-  foreignKey: "userId",
-  as: "user", // Optional: alias for the association
-});
 
 export default Stream;

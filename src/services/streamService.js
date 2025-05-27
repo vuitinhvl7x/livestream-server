@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import Stream from "../models/stream.js";
-import User from "../models/user.js";
+import { Stream, User } from "../models/index.js";
 import { Op } from "sequelize"; // For more complex queries if needed later
 
 /**
