@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Socket.IO Chat Test Client</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      input[type="text"],
+      input[type="password"] {
+        width: 300px;
+        padding: 8px;
+        margin-bottom: 10px;
+      }
+      button {
+        padding: 8px 15px;
+        margin-right: 5px;
+      }
+      #messages {
+        list-style-type: none;
+        padding: 0;
+        margin-top: 20px;
+        border: 1px solid #ccc;
+        height: 300px;
+        overflow-y: scroll;
+      }
+      #messages li {
+        padding: 8px;
+        border-bottom: 1px solid #eee;
+      }
+      .log-message {
+        color: blue;
+        font-style: italic;
+      }
+      .error-message {
+        color: red;
+        font-weight: bold;
+      }
+      .received-message {
+        color: green;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Socket.IO Chat Test Client</h1>
+
+    <div>
+      <label for="jwtToken">JWT Token:</label><br />
+      <input
+        type="text"
+        id="jwtToken"
+        placeholder="Dán JWT Token ở đây sau khi login"
+      /><br />
+    </div>
+
+    <button id="connectBtn">Connect</button>
+    <button id="disconnectBtn" disabled>Disconnect</button>
+    <hr />
+
+    <div>
+      <label for="streamId">Stream ID (Room):</label><br />
+      <input
+        type="text"
+        id="streamId"
+        placeholder="Nhập Stream ID để join/send"
+      /><br />
+      <button id="joinRoomBtn" disabled>Join Room</button>
+      <button id="leaveRoomBtn" disabled>Leave Room</button>
+    </div>
+    <hr />
+
+    <div>
+      <label for="message">Message:</label><br />
+      <input type="text" id="message" placeholder="Nhập tin nhắn" /><br />
+      <button id="sendMessageBtn" disabled>Send Message</button>
+    </div>
+
+    <h2>Logs & Messages:</h2>
+    <ul id="messages"></ul>
+
+    <script>
+      const jwtTokenInput = document.getElementById("jwtToken");
+      const connectBtn = document.getElementById("connectBtn");
+      const disconnectBtn = document.getElementById("disconnectBtn");
+      const streamIdInput = document.getElementById("streamId");
+      const joinRoomBtn = document.getElementById("joinRoomBtn");
+      const leaveRoomBtn = document.getElementById("leaveRoomBtn");
+      const messageInput = document.getElementById("message");
+      const sendMessageBtn = document.getElementById("sendMessageBtn");
+      const messagesList = document.getElementById("messages");
+
+      let socket;
+
+      function addLog(message, type = "log") {
+        const item = document.createElement("li");
+        item.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+        if (type === "error") item.classList.add("error-message");
+        else if (type === "received") item.classList.add("received-message");
+        else item.classList.add("log-message");
+        messagesList.appendChild(item);
+        messagesList.scrollTop = messagesList.scrollHeight;
+      }
+
+      connectBtn.addEventListener("click", () => {
+        const token = jwtTokenInput.value.trim();
+        if (!token) {
+          addLog("JWT Token is required to connect.", "error");
+          return;
+        }
+
+        if (socket && socket.connected) {
+          addLog("Already connected.", "log");
+          return;
+        }
+
+        // Thay đổi URL nếu server của bạn chạy ở port khác
+        socket = io("http://localhost:5000", {
+          auth: {
+            token: token,
+          },
+        });
+
+        addLog("Attempting to connect...", "log");
+
+        socket.on("connect", () => {
+          addLog(`Connected successfully! Socket ID: ${socket.id}`, "log");
+          connectBtn.disabled = true;
+          disconnectBtn.disabled = false;
+          joinRoomBtn.disabled = false;
+          // sendMessageBtn is enabled after joining a room
+        });
+
+        socket.on("connect_error", (err) => {
+          addLog(`Connection Error: ${err.message}`, "error");
+          if (err.message.includes("Authentication error")) {
+            addLog(
+              "Make sure your JWT token is valid and not expired.",
+              "error"
+            );
+          }
+          socket = null; // Reset socket
+        });
+
+        socket.on("disconnect", (reason) => {
+          addLog(`Disconnected: ${reason}`, "log");
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          joinRoomBtn.disabled = true;
+          leaveRoomBtn.disabled = true;
+          sendMessageBtn.disabled = true;
+          socket = null; // Reset socket
+        });
+
+        socket.on("new_message", (data) => {
+          addLog(
+            `(Room: ${data.streamId}) ${data.username}: ${data.message}`,
+            "received"
+          );
+        });
+
+        // Bạn có thể thêm listener cho các event khác từ server nếu có
+        // Ví dụ: user_joined_chat, error_joining_room, etc.
+      });
+
+      disconnectBtn.addEventListener("click", () => {
+        if (socket && socket.connected) {
+          socket.disconnect();
+        }
+      });
+
+      joinRoomBtn.addEventListener("click", () => {
+        const streamId = streamIdInput.value.trim();
+        if (!streamId) {
+          addLog("Stream ID is required to join a room.", "error");
+          return;
+        }
+        if (socket && socket.connected) {
+          socket.emit("join_stream_room", streamId);
+          addLog(`Attempting to join room: ${streamId}`, "log");
+          // Enable send message and leave room
+          sendMessageBtn.disabled = false;
+          leaveRoomBtn.disabled = false;
+        } else {
+          addLog("Not connected. Please connect first.", "error");
+        }
+      });
+
+      leaveRoomBtn.addEventListener("click", () => {
+        const streamId = streamIdInput.value.trim();
+        if (!streamId) {
+          // Thường thì client sẽ tự động leave khi disconnect,
+          // nhưng nếu muốn test việc chủ động leave khi vẫn connect:
+          addLog(
+            "Stream ID is required to leave a room. (Currently leaves all rooms on disconnect anyway)",
+            "error"
+          );
+          return;
+        }
+        if (socket && socket.connected) {
+          socket.emit("leave_stream_room", streamId);
+          addLog(`Attempting to leave room: ${streamId}`, "log");
+          sendMessageBtn.disabled = true; // Disable send if not in a room
+          // leaveRoomBtn.disabled = true; // Optionally disable leave after leaving one
+        } else {
+          addLog("Not connected.", "error");
+        }
+      });
+
+      sendMessageBtn.addEventListener("click", () => {
+        const streamId = streamIdInput.value.trim();
+        const message = messageInput.value.trim();
+        if (!streamId || !message) {
+          addLog("Stream ID and Message are required to send.", "error");
+          return;
+        }
+        if (socket && socket.connected) {
+          socket.emit("chat_message", { streamId, message });
+          addLog(`Sent to room ${streamId}: ${message}`, "log");
+          messageInput.value = ""; // Clear input after sending
+        } else {
+          addLog("Not connected. Please connect first.", "error");
+        }
+      });
+    </script>
+  </body>
+</html>
