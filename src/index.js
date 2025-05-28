@@ -9,7 +9,6 @@ import { connectMongoDB } from "./config/mongodb.js";
 import userRoutes from "./routes/userRoutes.js";
 import streamRoutes from "./routes/streamRoutes.js";
 import webhookRoutes from "./routes/webhookRoutes.js";
-// Import chat routes and handlers if they are created later
 import chatRoutes from "./routes/chatRoutes.js";
 import initializeSocketHandlers from "./socketHandlers.js";
 

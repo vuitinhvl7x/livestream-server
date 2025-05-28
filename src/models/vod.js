@@ -14,15 +14,21 @@ const VOD = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "Streams", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
+        model: "Streams",
         key: "id",
       },
+    },
+    streamKey: {
+      // Thêm streamKey để dễ dàng liên kết với thông tin từ Nginx webhook
+      type: DataTypes.STRING,
+      allowNull: true, // Hoặc false nếu bạn luôn có và yêu cầu streamKey
+      // unique: true, // Cân nhắc nếu streamKey phải là duy nhất
     },
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "Users", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
+        model: "Users",
         key: "id",
       },
     },
@@ -34,21 +40,38 @@ const VOD = sequelize.define(
       type: DataTypes.TEXT,
     },
     videoUrl: {
-      type: DataTypes.STRING,
+      // Sẽ lưu pre-signed URL
+      type: DataTypes.TEXT, // Pre-signed URLs có thể dài
       allowNull: false,
+    },
+    urlExpiresAt: {
+      // Thời điểm pre-signed URL hết hạn
+      type: DataTypes.DATE,
+      allowNull: false,
+    },
+    b2FileId: {
+      // ID file trên B2
+      type: DataTypes.STRING,
+      allowNull: true, // Hoặc false nếu đây là thông tin bắt buộc sau khi upload
+    },
+    b2FileName: {
+      // Tên file trên B2
+      type: DataTypes.STRING,
+      allowNull: true, // Hoặc false
     },
     thumbnail: {
       type: DataTypes.STRING,
     },
-    duration: {
+    durationSeconds: {
+      // Đổi tên từ duration để rõ ràng hơn là giây
       type: DataTypes.INTEGER, // Đơn vị: giây
     },
     // createdAt và updatedAt được Sequelize quản lý tự động nếu timestamps: true
   },
   {
     modelName: "VOD",
-    timestamps: true, // Mặc định là true, Sequelize sẽ tự thêm createdAt và updatedAt
-    // tableName: 'VODs' // Nếu bạn muốn tên bảng khác với tên model (số nhiều của modelName)
+    timestamps: true,
+    // tableName: 'VODs'
   }
 );
 
