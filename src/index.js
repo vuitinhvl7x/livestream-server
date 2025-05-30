@@ -10,6 +10,7 @@ import userRoutes from "./routes/userRoutes.js";
 import streamRoutes from "./routes/streamRoutes.js";
 import webhookRoutes from "./routes/webhookRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
+import vodRoutes from "./routes/vodRoutes.js";
 import initializeSocketHandlers from "./socketHandlers.js";
 
 dotenv.config();
@@ -42,6 +43,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/streams", streamRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/vod", vodRoutes);
 
 // Base route
 app.get("/", (req, res) => {

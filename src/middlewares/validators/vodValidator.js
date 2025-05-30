@@ -1,6 +1,7 @@
 import { body, param } from "express-validator";
 
-const createVOD = [
+// Validator cho việc tạo/upload VOD thủ công bởi admin
+const manualUploadVOD = [
   body("title")
     .trim()
     .notEmpty()
@@ -12,34 +13,58 @@ const createVOD = [
     .trim()
     .isLength({ max: 5000 })
     .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+
+  // Các trường này là bắt buộc khi upload thủ công VOD đã có trên B2
   body("videoUrl")
     .trim()
     .notEmpty()
-    .withMessage("videoUrl không được để trống.")
+    .withMessage("videoUrl (pre-signed URL từ B2) không được để trống.")
     .isURL()
     .withMessage("videoUrl phải là một URL hợp lệ."),
-  body("streamId")
+  body("urlExpiresAt")
     .notEmpty()
-    .withMessage("streamId không được để trống.")
+    .withMessage(
+      "urlExpiresAt (thời điểm hết hạn của videoUrl) không được để trống."
+    )
+    .isISO8601()
+    .withMessage("urlExpiresAt phải là một ngày hợp lệ theo định dạng ISO8601.")
+    .toDate(), // Chuyển đổi thành Date object
+  body("b2FileId")
+    .trim()
+    .notEmpty()
+    .withMessage("b2FileId (ID file trên B2) không được để trống."),
+  body("b2FileName")
+    .trim()
+    .notEmpty()
+    .withMessage("b2FileName (tên file trên B2) không được để trống."),
+  body("durationSeconds")
+    .notEmpty()
+    .withMessage(
+      "durationSeconds (thời lượng video tính bằng giây) không được để trống."
+    )
     .isInt({ gt: 0 })
-    .withMessage("streamId phải là một số nguyên dương."),
-  // userId sẽ được lấy từ token, không cần validate ở đây nếu vậy
-  // Hoặc nếu webhook gửi userId, thì validate ở đây
-  // body('userId')
-  //   .if((value, { req }) => !req.user) // Chỉ validate nếu không có req.user (ví dụ: webhook)
-  //   .notEmpty().withMessage('userId không được để trống khi không có token xác thực.')
-  //   .isInt({ gt: 0 }).withMessage('userId phải là một số nguyên dương.'),
+    .withMessage("durationSeconds phải là một số nguyên dương.")
+    .toInt(),
+
+  // Các trường tùy chọn
+  body("streamId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("streamId (nếu có) phải là một số nguyên dương.")
+    .toInt(),
+  body("streamKey")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("streamKey (nếu có) không được để trống."),
   body("thumbnail")
     .optional()
     .trim()
     .isURL()
-    .withMessage("Thumbnail phải là một URL hợp lệ."),
-  body("duration")
-    .optional()
-    .isInt({ gt: 0 })
-    .withMessage("Thời lượng video phải là một số nguyên dương (giây)."),
+    .withMessage("Thumbnail (nếu có) phải là một URL hợp lệ."),
+  // userId sẽ được lấy từ token xác thực, không cần validate ở đây
 ];
 
 export const vodValidationRules = {
-  createVOD,
+  manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
 };

@@ -1,23 +1,22 @@
 import express from "express";
 import { vodController } from "../controllers/vodController.js";
-import { authMiddleware } from "../middlewares/authMiddleware.js"; // Middleware xác thực JWT
-import { vodValidationRules } from "../middlewares/validators/vodValidator.js"; // Middleware validation
+import authenticateToken from "../middlewares/authMiddleware.js"; // Đổi tên import cho đúng với file export
+import { vodValidationRules } from "../middlewares/validators/vodValidator.js";
 // import upload from '../middlewares/uploadMiddleware.js'; // Tùy chọn: Middleware cho upload file (ví dụ: multer)
 
 const router = express.Router();
 
 /**
  * @route   POST /api/vod/upload
- * @desc    Tạo (upload) một VOD mới.
- *          Nếu upload file trực tiếp, middleware `upload.single('videoFile')` hoặc `upload.fields([...])` có thể được dùng ở đây.
- *          Nếu media server gửi thông tin sau khi đã lưu file, thì không cần middleware upload file.
- * @access  Private
+ * @desc    (Admin/Manual Upload) Tạo một VOD mới.
+ *          Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
+ * @access  Private (Admin - yêu cầu xác thực)
  */
 router.post(
   "/upload",
-  authMiddleware, // Xác thực người dùng (hoặc webhook có cơ chế riêng)
+  authenticateToken, // Sử dụng tên middleware đã import chính xác
   // upload.single('videoFile'), // Ví dụ: nếu client upload file video tên là 'videoFile'
-  vodValidationRules.createVOD, // Áp dụng luật validation
+  vodValidationRules.manualUploadVOD, // Sử dụng validator mới cho manual upload
   vodController.uploadVOD
 );
 
@@ -28,7 +27,7 @@ router.post(
  */
 router.get(
   "/",
-  // authMiddleware, // Bỏ comment nếu muốn endpoint này là private
+  // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
   vodController.getAllVODs
 );
 
@@ -39,7 +38,7 @@ router.get(
  */
 router.get(
   "/:id",
-  // authMiddleware, // Bỏ comment nếu muốn endpoint này là private
+  // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
   vodController.getVODDetails
 );
 
@@ -50,8 +49,19 @@ router.get(
  */
 router.delete(
   "/:id",
-  authMiddleware, // Yêu cầu xác thực
+  authenticateToken, // Yêu cầu xác thực
   vodController.removeVOD
+);
+
+/**
+ * @route   POST /api/vod/:id/refresh-url
+ * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
+ * @access  Private (yêu cầu xác thực)
+ */
+router.post(
+  "/:id/refresh-url",
+  authenticateToken, // Yêu cầu xác thực
+  vodController.refreshVODSignedUrl
 );
 
 export default router;
