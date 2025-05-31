@@ -1,7 +1,7 @@
 import express from "express";
 import { vodController } from "../controllers/vodController.js";
 import authenticateToken from "../middlewares/authMiddleware.js"; // Đổi tên import cho đúng với file export
-import { vodValidationRules } from "../middlewares/validators/vodValidator.js";
+import { vodValidationRules } from "../validators/vodValidator.js";
 // import upload from '../middlewares/uploadMiddleware.js'; // Tùy chọn: Middleware cho upload file (ví dụ: multer)
 
 const router = express.Router();
