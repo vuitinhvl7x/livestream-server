@@ -11,6 +11,7 @@ import {
   generateThumbnailFromVideo,
 } from "../utils/videoUtils.js"; // Thêm generateThumbnailFromVideo
 import path from "path";
+import fs from "fs/promises"; // Thêm fs để xóa file tạm
 
 const logger = {
   info: console.log,
@@ -226,12 +227,13 @@ const refreshVODSignedUrl = async (req, res, next) => {
  * @access  Private (Yêu cầu xác thực)
  */
 const uploadLocalVODFile = async (req, res, next) => {
+  let videoFilePathTemp = null; // Để lưu đường dẫn file tạm cho việc xóa
+  let thumbnailFilePathTemp = null;
+
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       const firstError = errors.array({ onlyFirstError: true })[0];
-      // Xóa file tạm nếu có lỗi validation sớm (multer đã lưu vào memory)
-      // Tuy nhiên, với memoryStorage thì không cần xóa file vật lý.
       throw new AppError(`Validation failed: ${firstError.msg}`, 400);
     }
 
@@ -251,27 +253,31 @@ const uploadLocalVODFile = async (req, res, next) => {
 
     const { title, description } = validatedData;
     const videoFile = req.files.videoFile[0];
+    videoFilePathTemp = videoFile.path; // Lưu đường dẫn file video tạm
 
-    let thumbnailFileBuffer = null;
+    let thumbnailFilePath = null; // Sẽ truyền vào service
     let originalThumbnailFileName = null;
     let thumbnailMimeType = null;
 
     if (req.files.thumbnailFile && req.files.thumbnailFile[0]) {
       const thumbnailFile = req.files.thumbnailFile[0];
-      thumbnailFileBuffer = thumbnailFile.buffer;
+      thumbnailFilePathTemp = thumbnailFile.path; // Lưu đường dẫn file thumbnail tạm
+      thumbnailFilePath = thumbnailFile.path; // Gán cho biến sẽ truyền đi
       originalThumbnailFileName = thumbnailFile.originalname;
       thumbnailMimeType = thumbnailFile.mimetype;
-      logger.info("Controller: Thumbnail được cung cấp bởi người dùng.");
+      logger.info(
+        "Controller: Thumbnail được cung cấp bởi người dùng từ file tạm."
+      );
     }
 
     const servicePayload = {
       userId,
       title,
       description,
-      videoFileBuffer: videoFile.buffer,
+      videoFilePath: videoFile.path, // Truyền đường dẫn file video
       originalVideoFileName: videoFile.originalname,
       videoMimeType: videoFile.mimetype,
-      thumbnailFileBuffer, // có thể là null
+      thumbnailFilePath, // Truyền đường dẫn file thumbnail (có thể là null)
       originalThumbnailFileName, // có thể là null
       thumbnailMimeType, // có thể là null
     };
@@ -280,7 +286,8 @@ const uploadLocalVODFile = async (req, res, next) => {
       userId: servicePayload.userId,
       title: servicePayload.title,
       originalVideoFileName: servicePayload.originalVideoFileName,
-      hasUserThumbnail: !!servicePayload.thumbnailFileBuffer,
+      videoFilePath: servicePayload.videoFilePath,
+      hasUserThumbnail: !!servicePayload.thumbnailFilePath,
     });
 
     const newVOD = await vodService.createVODFromUpload(servicePayload);
@@ -292,9 +299,33 @@ const uploadLocalVODFile = async (req, res, next) => {
     });
   } catch (error) {
     logger.error("Controller: Lỗi khi upload VOD từ local:", error);
-    // Service đã bao gồm logic dọn dẹp file trên B2 nếu cần.
-    // Controller chỉ cần chuyển lỗi cho error handling middleware.
     next(error);
+  } finally {
+    // Xóa file tạm sau khi xử lý
+    if (videoFilePathTemp) {
+      try {
+        await fs.unlink(videoFilePathTemp);
+        logger.info(`Controller: Đã xóa file video tạm: ${videoFilePathTemp}`);
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file video tạm ${videoFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
   }
 };
 

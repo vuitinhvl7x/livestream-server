@@ -17,6 +17,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@gideo-llc/backblaze-b2-upload-any": "^0.1.4",
     "backblaze-b2": "^1.7.1",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.2.0",

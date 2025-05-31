@@ -1,9 +1,13 @@
 import B2 from "backblaze-b2";
+import uploadAnyExtension from "@gideo-llc/backblaze-b2-upload-any"; // Import extension
 import fs from "fs/promises";
 import path from "path";
 import dotenv from "dotenv";
 
 dotenv.config(); // Load environment variables from .env file
+
+// Install the uploadAny extension (Intrusive way)
+uploadAnyExtension.install(B2);
 
 // Load configuration from environment variables
 const APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
@@ -33,8 +37,8 @@ const b2 = new B2({
  */
 async function authorizeB2() {
   try {
+    // The intrusive install wraps authorize, so this call is important.
     const authData = await b2.authorize();
-    // console.log("Successfully authorized with Backblaze B2."); // Ghi log ít hơn khi thành công thường xuyên
     return authData.data;
   } catch (error) {
     console.error("Error authorizing with Backblaze B2:", error);
@@ -43,56 +47,70 @@ async function authorizeB2() {
 }
 
 /**
- * Uploads a video file (and optionally a thumbnail) buffer to Backblaze B2
+ * Uploads a video file (and optionally a thumbnail) stream to Backblaze B2
+ * using @gideo-llc/backblaze-b2-upload-any extension
  * and generates pre-signed URLs for private access.
- * @param {Buffer} videoBuffer - The buffer of the video file.
- * @param {string} videoFileNameInB2 - The desired file name for the video in B2 (e.g., users/userId/vods/timestamp_originalName.mp4).
+ * @param {import('stream').Readable} videoStream - The readable stream of the video file.
+ * @param {number} videoSize - The size of the video file in bytes (may not be strictly needed by uploadAny but good for context).
+ * @param {string} videoFileNameInB2 - The desired file name for the video in B2.
  * @param {string} videoMimeType - The MIME type of the video file.
- * @param {Buffer} [thumbnailBuffer] - Optional buffer of the thumbnail file.
- * @param {string} [thumbnailFileNameInB2] - Optional desired file name for the thumbnail in B2 (e.g., users/userId/vods/timestamp_originalName_thumb.png).
+ * @param {import('stream').Readable} [thumbnailStream] - Optional readable stream of the thumbnail file.
+ * @param {number} [thumbnailSize] - Optional size of the thumbnail file in bytes (may not be strictly needed by uploadAny).
+ * @param {string} [thumbnailFileNameInB2] - Optional desired file name for the thumbnail in B2.
  * @param {string} [thumbnailMimeType] - Optional MIME type of the thumbnail file.
  * @param {number} [durationSeconds=0] - Duration of the video in seconds.
  * @param {number} [presignedUrlDurationSecs=parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 25200] - Duration for pre-signed URLs.
  * @returns {Promise<object>} - An object containing B2 file info and pre-signed URLs for video and thumbnail.
  */
 async function uploadToB2AndGetPresignedUrl(
-  videoBuffer,
+  videoStream,
+  videoSize, // Kept for context, uploadAny might not directly use it for streams
   videoFileNameInB2,
   videoMimeType,
-  thumbnailBuffer,
+  thumbnailStream,
+  thumbnailSize, // Kept for context
   thumbnailFileNameInB2,
   thumbnailMimeType,
-  durationSeconds = 0, // Sẽ được trả về, B2 có thể không lưu trực tiếp vào metadata chuẩn
+  durationSeconds = 0,
   presignedUrlDurationSecs = parseInt(
     process.env.B2_PRESIGNED_URL_DURATION_SECONDS
-  ) || 25200 // 7 giờ
+  ) || 25200
 ) {
   try {
-    const authData = await authorizeB2();
+    const authData = await authorizeB2(); // Ensures b2 instance is authorized and extension has run its authorization wrapper
     const accountDownloadUrl = authData.downloadUrl;
 
-    // --- Upload Video ---
-    const { data: videoUploadUrlData } = await b2.getUploadUrl({
-      bucketId: BUCKET_ID,
-    });
-    const uploadedVideoResponse = await b2.uploadFile({
-      uploadUrl: videoUploadUrlData.uploadUrl,
-      uploadAuthToken: videoUploadUrlData.authorizationToken,
-      fileName: videoFileNameInB2,
-      data: videoBuffer,
-      mime: videoMimeType,
-      info: {
-        // Thông tin tùy chỉnh có thể thêm vào đây nếu cần (B2 hỗ trợ 'b2-content-disposition', 'b2-cache-control', v.v...)
-        // 'duration': durationSeconds.toString() // Ví dụ, nếu muốn thử lưu duration
-      },
-      onUploadProgress: (event) => {
-        // Optional: log progress
-      },
-    });
-    const videoB2FileId = uploadedVideoResponse.data.fileId;
-    const videoB2FileName = uploadedVideoResponse.data.fileName;
+    // --- Upload Video using uploadAny ---
     console.log(
-      `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2.`
+      `Uploading video stream ${videoFileNameInB2} using uploadAny...`
+    );
+    const uploadedVideoResponse = await b2.uploadAny({
+      bucketId: BUCKET_ID,
+      fileName: videoFileNameInB2,
+      data: videoStream,
+      contentType: videoMimeType,
+      // partSize will be automatically set if using intrusive install, otherwise: authData.recommendedPartSize
+      // Other options like concurrency can be added here if needed
+    });
+    // Assuming response structure is similar to b2.uploadFile(), providing .data.fileId and .data.fileName
+    // If @gideo-llc/backblaze-b2-upload-any returns the raw b2_upload_file response, it might be directly uploadedVideoResponse.fileId
+    // Let's assume it's nested under .data for now, adjust if logs show otherwise.
+    const videoB2FileId =
+      uploadedVideoResponse.fileId || uploadedVideoResponse.data?.fileId;
+    const videoB2FileName =
+      uploadedVideoResponse.fileName || uploadedVideoResponse.data?.fileName;
+
+    if (!videoB2FileId || !videoB2FileName) {
+      console.error(
+        "uploadAny video response missing fileId or fileName:",
+        uploadedVideoResponse
+      );
+      throw new Error(
+        "Failed to get fileId or fileName from B2 uploadAny video response."
+      );
+    }
+    console.log(
+      `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2 via uploadAny.`
     );
 
     // --- Generate Pre-signed URL for Video ---
@@ -111,22 +129,38 @@ async function uploadToB2AndGetPresignedUrl(
     let thumbnailViewableUrl = null;
     let thumbnailUrlExpiresAt = null;
 
-    // --- Upload Thumbnail (if provided) ---
-    if (thumbnailBuffer && thumbnailFileNameInB2 && thumbnailMimeType) {
-      const { data: thumbUploadUrlData } = await b2.getUploadUrl({
-        bucketId: BUCKET_ID,
-      });
-      const uploadedThumbResponse = await b2.uploadFile({
-        uploadUrl: thumbUploadUrlData.uploadUrl,
-        uploadAuthToken: thumbUploadUrlData.authorizationToken,
-        fileName: thumbnailFileNameInB2,
-        data: thumbnailBuffer,
-        mime: thumbnailMimeType,
-      });
-      thumbnailB2FileId = uploadedThumbResponse.data.fileId;
-      thumbnailB2FileName = uploadedThumbResponse.data.fileName;
+    // --- Upload Thumbnail using uploadAny (if provided) ---
+    if (
+      thumbnailStream &&
+      thumbnailFileNameInB2 &&
+      thumbnailMimeType &&
+      thumbnailSize > 0 // Keep size check logic as a basic validation
+    ) {
       console.log(
-        `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2.`
+        `Uploading thumbnail stream ${thumbnailFileNameInB2} using uploadAny...`
+      );
+      const uploadedThumbResponse = await b2.uploadAny({
+        bucketId: BUCKET_ID,
+        fileName: thumbnailFileNameInB2,
+        data: thumbnailStream,
+        contentType: thumbnailMimeType,
+      });
+      thumbnailB2FileId =
+        uploadedThumbResponse.fileId || uploadedThumbResponse.data?.fileId;
+      thumbnailB2FileName =
+        uploadedThumbResponse.fileName || uploadedThumbResponse.data?.fileName;
+
+      if (!thumbnailB2FileId || !thumbnailB2FileName) {
+        console.error(
+          "uploadAny thumbnail response missing fileId or fileName:",
+          uploadedThumbResponse
+        );
+        throw new Error(
+          "Failed to get fileId or fileName from B2 uploadAny thumbnail response."
+        );
+      }
+      console.log(
+        `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2 via uploadAny.`
       );
 
       // --- Generate Pre-signed URL for Thumbnail ---

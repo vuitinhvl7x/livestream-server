@@ -10,9 +10,11 @@ import {
   generateThumbnailFromVideo,
 } from "../utils/videoUtils.js";
 import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import dotenv from "dotenv";
+import { Readable } from "stream";
 
 dotenv.config();
 
@@ -205,7 +207,6 @@ const processRecordedFileToVOD = async ({
 }) => {
   let mp4FilePath = null;
   let thumbnailFilePath = null;
-  // Biến này sẽ chứa kết quả từ một lần gọi uploadToB2AndGetPresignedUrl
   let b2UploadResponse = null;
 
   try {
@@ -246,7 +247,7 @@ const processRecordedFileToVOD = async ({
     await convertFlvToMp4(originalFilePath, mp4FilePath);
 
     // 4. Lấy thời lượng video (từ file MP4 đã convert)
-    const durationSeconds = await getVideoDuration(mp4FilePath);
+    const durationSeconds = await getVideoDurationInSeconds(mp4FilePath);
 
     // 5. Trích xuất Thumbnail (từ file MP4)
     let thumbnailTimestampString;
@@ -275,41 +276,52 @@ const processRecordedFileToVOD = async ({
       thumbnailTimestampString
     );
 
-    // 6. Đọc buffers cho video và thumbnail
-    logger.info(`Reading MP4 file to buffer: ${mp4FilePath}`);
-    const mp4FileBuffer = await fs.readFile(mp4FilePath);
+    // 6. Chuẩn bị stream và thông tin file để upload
+    logger.info(`Preparing streams for MP4 file: ${mp4FilePath}`);
+    const mp4FileSize = fsSync.statSync(mp4FilePath).size;
+    const mp4FileStream = fsSync.createReadStream(mp4FilePath);
 
-    let thumbnailFileBuffer = null;
+    let thumbnailFileStream = null;
+    let thumbnailFileSize = 0;
+    let thumbnailExists = false;
     try {
       await fs.access(thumbnailFilePath); // Kiểm tra file thumbnail tồn tại
-      logger.info(`Reading thumbnail file to buffer: ${thumbnailFilePath}`);
-      thumbnailFileBuffer = await fs.readFile(thumbnailFilePath);
+      thumbnailExists = true;
+      logger.info(`Preparing stream for thumbnail file: ${thumbnailFilePath}`);
+      thumbnailFileSize = fsSync.statSync(thumbnailFilePath).size;
+      thumbnailFileStream = fsSync.createReadStream(thumbnailFilePath);
     } catch (thumbAccessError) {
       logger.warn(
         `Thumbnail file at ${thumbnailFilePath} not accessible or does not exist. Proceeding without thumbnail upload.`
       );
-      // thumbnailFileBuffer sẽ vẫn là null
+      // thumbnailFileStream sẽ vẫn là null
     }
 
     // 7. Chuẩn bị tên file trên B2 và Upload MỘT LẦN
     const timestamp = Date.now();
     const videoFileNameInB2 = `vods/${baseName}-${timestamp}.mp4`;
     let thumbnailFileNameInB2 = null;
-    if (thumbnailFileBuffer) {
+    if (thumbnailExists) {
       thumbnailFileNameInB2 = `vods/thumbnails/${baseName}-thumb-${timestamp}.jpg`;
     }
 
     const presignedUrlDuration =
       parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
 
-    logger.info(`Uploading video and thumbnail (if available) to B2...`);
+    logger.info(
+      `Uploading video stream and thumbnail stream (if available) to B2...`
+    );
+    // Giả định uploadToB2AndGetPresignedUrl đã được cập nhật để nhận stream và file size
+    // Ví dụ: uploadToB2AndGetPresignedUrl(videoStream, videoSize, videoName, videoMime, thumbStream, thumbSize, thumbName, thumbMime, metaDuration, presignedDuration)
     b2UploadResponse = await uploadToB2AndGetPresignedUrl(
-      mp4FileBuffer,
+      mp4FileStream,
+      mp4FileSize,
       videoFileNameInB2,
       "video/mp4",
-      thumbnailFileBuffer, // Sẽ là null nếu không có thumbnail
+      thumbnailFileStream, // Sẽ là null nếu không có thumbnail
+      thumbnailFileSize, // Sẽ là 0 nếu không có thumbnail
       thumbnailFileNameInB2, // Sẽ là null nếu không có thumbnail
-      thumbnailFileBuffer ? "image/jpeg" : null, // MIME type cho thumbnail
+      thumbnailExists ? "image/jpeg" : null, // MIME type cho thumbnail
       durationSeconds,
       presignedUrlDuration
     );
@@ -694,92 +706,121 @@ const refreshVODUrl = async (vodId) => {
  * @param {number} data.userId
  * @param {string} data.title
  * @param {string} [data.description]
- * @param {Buffer} data.videoFileBuffer
+ * @param {string} data.videoFilePath
  * @param {string} data.originalVideoFileName
  * @param {string} data.videoMimeType
- * @param {Buffer} [data.thumbnailFileBuffer] - Buffer thumbnail do người dùng cung cấp (tùy chọn)
- * @param {string} [data.originalThumbnailFileName] - Tên file thumbnail gốc từ người dùng (tùy chọn)
- * @param {string} [data.thumbnailMimeType] - MIME type của thumbnail từ người dùng (tùy chọn)
+ * @param {string} [data.thumbnailFilePath] - Path to thumbnail file (optional)
+ * @param {string} [data.originalThumbnailFileName] - Original thumbnail file name (optional)
+ * @param {string} [data.thumbnailMimeType] - MIME type of the thumbnail (optional)
  * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
  */
 const createVODFromUpload = async ({
   userId,
   title,
   description,
-  videoFileBuffer,
+  videoFilePath,
   originalVideoFileName,
   videoMimeType,
-  thumbnailFileBuffer, // Từ client hoặc null
-  originalThumbnailFileName, // Từ client hoặc tên mặc định nếu tạo tự động
-  thumbnailMimeType, // Từ client hoặc 'image/png' nếu tạo tự động
+  thumbnailFilePath,
+  originalThumbnailFileName,
+  thumbnailMimeType,
 }) => {
   let b2VideoFileIdToDelete = null;
   let b2VideoFileNameToDelete = null;
   let b2ThumbFileIdToDelete = null;
   let b2ThumbFileNameToDelete = null;
-  let generatedThumbnailBuffer = null; // Buffer cho thumbnail tự tạo
 
   try {
     logger.info(
-      `Service: Bắt đầu xử lý upload VOD từ local cho user: ${userId}, video: ${originalVideoFileName}`
+      `Service: Bắt đầu xử lý upload VOD từ file: ${videoFilePath} cho user: ${userId}`
     );
 
-    // 1. Lấy thời lượng video
-    let durationSeconds = 0;
-    try {
-      durationSeconds = await getVideoDuration(videoFileBuffer);
-      logger.info(`Service: Thời lượng video: ${durationSeconds} giây.`);
-    } catch (durationError) {
-      logger.error("Service: Không thể lấy thời lượng video:", durationError);
-      // Quyết định: có thể throw lỗi hoặc tiếp tục với duration 0
-      // throw new AppError("Không thể xác định thời lượng video.", 500);
+    // 1. Lấy thông tin file video (kích thước, thời lượng)
+    const videoStats = await fs.stat(videoFilePath);
+    const videoSize = videoStats.size;
+    if (videoSize === 0) {
+      throw new AppError("Video file is empty.", 400);
     }
+    const durationSeconds = await getVideoDurationInSeconds(videoFilePath);
+    logger.info(`Service: Thời lượng video: ${durationSeconds} giây.`);
 
     // 2. Xử lý Thumbnail
-    let finalThumbnailBuffer = thumbnailFileBuffer;
+    let thumbnailStream = null;
+    let thumbnailSize = 0;
     let finalThumbnailMimeType = thumbnailMimeType;
     let finalOriginalThumbnailFileName = originalThumbnailFileName;
 
-    if (!finalThumbnailBuffer) {
-      logger.info("Service: Không có thumbnail từ user, đang tạo tự động...");
-      try {
-        generatedThumbnailBuffer = await generateThumbnailFromVideo(
-          videoFileBuffer,
-          `thumb_${path.parse(originalVideoFileName).name}.png`,
-          "00:00:01"
+    if (thumbnailFilePath) {
+      // Người dùng cung cấp thumbnail
+      logger.info(
+        `Service: Sử dụng thumbnail từ file cung cấp: ${thumbnailFilePath}`
+      );
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      thumbnailSize = thumbStats.size;
+      if (thumbnailSize > 0) {
+        thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+      }
+    } else {
+      // Không có thumbnail từ người dùng, thử tạo tự động
+      logger.info(
+        `Service: Không có thumbnail từ người dùng, thử tạo tự động từ video: ${videoFilePath}`
+      );
+      const autoThumbnailPath = await generateThumbnailFromVideo(
+        videoFilePath,
+        durationSeconds
+      );
+      if (autoThumbnailPath) {
+        thumbnailFilePath = autoThumbnailPath; // Cập nhật đường dẫn để xóa sau
+        finalOriginalThumbnailFileName = path.basename(autoThumbnailPath);
+        finalThumbnailMimeType = "image/jpeg"; // Hoặc image/png tùy theo generateThumbnailFromVideo
+        const thumbStats = await fs.stat(autoThumbnailPath);
+        thumbnailSize = thumbStats.size;
+        if (thumbnailSize > 0) {
+          thumbnailStream = fsSync.createReadStream(autoThumbnailPath);
+        }
+        logger.info(
+          `Service: Đã tạo thumbnail tự động tại: ${autoThumbnailPath}`
         );
-        finalThumbnailBuffer = generatedThumbnailBuffer;
-        finalThumbnailMimeType = "image/png";
-        finalOriginalThumbnailFileName = `thumb_${
-          path.parse(originalVideoFileName).name
-        }.png`;
-        logger.info("Service: Đã tạo thumbnail tự động.");
-      } catch (thumbError) {
-        logger.error("Service: Lỗi khi tạo thumbnail tự động:", thumbError);
-        // Không throw lỗi, VOD vẫn có thể được tạo mà không có thumbnail
+      } else {
+        logger.warn(
+          `Service: Không thể tạo thumbnail tự động cho video: ${videoFilePath}`
+        );
       }
     }
 
-    // 3. Chuẩn bị tên file cho B2
-    const timestamp = Date.now();
-    const videoFileNameInB2 = `users/${userId}/vods/${timestamp}_${originalVideoFileName}`;
-    let thumbnailFileNameInB2 = null;
-    if (finalThumbnailBuffer && finalOriginalThumbnailFileName) {
-      const thumbExt = path.extname(finalOriginalThumbnailFileName) || ".png";
-      thumbnailFileNameInB2 = `users/${userId}/vods/${timestamp}_${
-        path.parse(originalVideoFileName).name
-      }_thumb${thumbExt}`;
+    // 3. Chuẩn bị tên file trên B2 (Sanitize filenames)
+    const safeOriginalVideoFileName = originalVideoFileName.replace(
+      /[^a-zA-Z0-9.\-_]/g,
+      "_"
+    );
+    let safeOriginalThumbnailFileName = "";
+    if (finalOriginalThumbnailFileName) {
+      safeOriginalThumbnailFileName = finalOriginalThumbnailFileName.replace(
+        /[^a-zA-Z0-9.\-_]/g,
+        "_"
+      );
     }
 
-    // 4. Upload lên B2
-    logger.info("Service: Bắt đầu upload file lên B2...");
+    const videoFileNameInB2 = `users/${userId}/vods/${Date.now()}_${safeOriginalVideoFileName}`;
+    let thumbnailFileNameInB2 = null;
+    if (thumbnailStream && safeOriginalThumbnailFileName) {
+      thumbnailFileNameInB2 = `users/${userId}/vods/thumbnails/${Date.now()}_${safeOriginalThumbnailFileName}`;
+    }
+
+    // 4. Tạo video stream
+    const videoStream = fsSync.createReadStream(videoFilePath);
+
+    // 5. Upload lên B2
+    logger.info("Service: Bắt đầu upload stream file lên B2...");
     const b2Response = await uploadToB2AndGetPresignedUrl(
-      videoFileBuffer,
+      videoStream,
+      videoSize,
       videoFileNameInB2,
       videoMimeType,
-      finalThumbnailBuffer, // Có thể là null
-      thumbnailFileNameInB2, // Có thể là null
-      finalThumbnailMimeType, // Có thể là null
+      thumbnailStream,
+      thumbnailSize,
+      thumbnailFileNameInB2,
+      finalThumbnailMimeType,
       durationSeconds
     );
     logger.info(
@@ -788,13 +829,12 @@ const createVODFromUpload = async ({
       }, Thumbnail - ${b2Response.thumbnail?.b2FileName || "N/A"}`
     );
 
-    // Gán để có thể xóa nếu bước sau lỗi
     b2VideoFileIdToDelete = b2Response.video?.b2FileId;
     b2VideoFileNameToDelete = b2Response.video?.b2FileName;
     b2ThumbFileIdToDelete = b2Response.thumbnail?.b2FileId;
     b2ThumbFileNameToDelete = b2Response.thumbnail?.b2FileName;
 
-    // 5. Tạo bản ghi VOD trong DB (gọi hàm createVOD hiện tại)
+    // 6. Tạo bản ghi VOD trong DB
     const vodToCreate = {
       userId,
       title,
@@ -815,7 +855,6 @@ const createVODFromUpload = async ({
     return newVOD;
   } catch (error) {
     logger.error("Service: Lỗi trong createVODFromUpload:", error);
-    // Logic dọn dẹp file trên B2 nếu đã upload nhưng gặp lỗi
     if (b2VideoFileIdToDelete && b2VideoFileNameToDelete) {
       try {
         logger.info(
@@ -842,7 +881,6 @@ const createVODFromUpload = async ({
         );
       }
     }
-    // Re-throw lỗi để controller có thể gửi response phù hợp
     if (error instanceof AppError) throw error;
     throw new AppError(`Lỗi khi xử lý upload VOD: ${error.message}`, 500);
   }
