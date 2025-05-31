@@ -1,6 +1,16 @@
 import { vodService } from "../services/vodService.js";
 import { AppError } from "../utils/errorHandler.js";
 import { matchedData, validationResult } from "express-validator"; // Sử dụng express-validator để validate
+import {
+  uploadToB2AndGetPresignedUrl,
+  generatePresignedUrlForExistingFile,
+  deleteFileFromB2,
+} from "../lib/b2.service.js"; // Thêm import B2 service
+import {
+  getVideoDurationInSeconds,
+  generateThumbnailFromVideo,
+} from "../utils/videoUtils.js"; // Thêm generateThumbnailFromVideo
+import path from "path";
 
 const logger = {
   info: console.log,
@@ -210,10 +220,89 @@ const refreshVODSignedUrl = async (req, res, next) => {
   }
 };
 
+/**
+ * @route   POST /api/vod/upload-local
+ * @desc    Tạo VOD mới bằng cách upload file từ máy người dùng.
+ * @access  Private (Yêu cầu xác thực)
+ */
+const uploadLocalVODFile = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      // Xóa file tạm nếu có lỗi validation sớm (multer đã lưu vào memory)
+      // Tuy nhiên, với memoryStorage thì không cần xóa file vật lý.
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id;
+
+    if (!userId) {
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    if (!req.files || !req.files.videoFile || !req.files.videoFile[0]) {
+      throw new AppError(
+        "Không có file video nào (videoFile) được tải lên.",
+        400
+      );
+    }
+
+    const { title, description } = validatedData;
+    const videoFile = req.files.videoFile[0];
+
+    let thumbnailFileBuffer = null;
+    let originalThumbnailFileName = null;
+    let thumbnailMimeType = null;
+
+    if (req.files.thumbnailFile && req.files.thumbnailFile[0]) {
+      const thumbnailFile = req.files.thumbnailFile[0];
+      thumbnailFileBuffer = thumbnailFile.buffer;
+      originalThumbnailFileName = thumbnailFile.originalname;
+      thumbnailMimeType = thumbnailFile.mimetype;
+      logger.info("Controller: Thumbnail được cung cấp bởi người dùng.");
+    }
+
+    const servicePayload = {
+      userId,
+      title,
+      description,
+      videoFileBuffer: videoFile.buffer,
+      originalVideoFileName: videoFile.originalname,
+      videoMimeType: videoFile.mimetype,
+      thumbnailFileBuffer, // có thể là null
+      originalThumbnailFileName, // có thể là null
+      thumbnailMimeType, // có thể là null
+    };
+
+    logger.info("Controller: Gọi vodService.createVODFromUpload với payload:", {
+      userId: servicePayload.userId,
+      title: servicePayload.title,
+      originalVideoFileName: servicePayload.originalVideoFileName,
+      hasUserThumbnail: !!servicePayload.thumbnailFileBuffer,
+    });
+
+    const newVOD = await vodService.createVODFromUpload(servicePayload);
+
+    res.status(201).json({
+      success: true,
+      message: "VOD đã được upload và tạo thành công.",
+      data: newVOD,
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi upload VOD từ local:", error);
+    // Service đã bao gồm logic dọn dẹp file trên B2 nếu cần.
+    // Controller chỉ cần chuyển lỗi cho error handling middleware.
+    next(error);
+  }
+};
+
 export const vodController = {
   uploadVOD,
+  uploadLocalVODFile,
   getAllVODs,
   getVODDetails,
   removeVOD,
-  refreshVODSignedUrl, 
+  refreshVODSignedUrl,
 };

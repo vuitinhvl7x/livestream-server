@@ -12,7 +12,7 @@ const VOD = sequelize.define(
     },
     streamId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: "Streams",
         key: "id",
@@ -59,8 +59,21 @@ const VOD = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true, // Hoặc false
     },
-    thumbnail: {
+    thumbnailUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    thumbnailUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    b2ThumbnailFileId: {
       type: DataTypes.STRING,
+      allowNull: true,
+    },
+    b2ThumbnailFileName: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     durationSeconds: {
       // Đổi tên từ duration để rõ ràng hơn là giây

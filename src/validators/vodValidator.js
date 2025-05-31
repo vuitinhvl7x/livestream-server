@@ -65,6 +65,25 @@ const manualUploadVOD = [
   // userId sẽ được lấy từ token xác thực, không cần validate ở đây
 ];
 
+// Validator cho việc upload VOD từ file local
+const uploadLocalVOD = [
+  body("title")
+    .trim()
+    .notEmpty()
+    .withMessage("Tiêu đề VOD không được để trống.")
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 5000 })
+    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+  // Các trường tùy chọn khác có thể thêm sau nếu cần
+  // File video sẽ được xử lý bởi multer, không cần validate ở đây
+  // streamId, streamKey, userId sẽ được xử lý trong controller
+];
+
 export const vodValidationRules = {
   manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
+  uploadLocalVOD,
 };

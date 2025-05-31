@@ -34,8 +34,8 @@ const b2 = new B2({
 async function authorizeB2() {
   try {
     const authData = await b2.authorize();
-    console.log("Successfully authorized with Backblaze B2.");
-    return authData.data; // Return the actual data object from the response
+    // console.log("Successfully authorized with Backblaze B2."); // Ghi log ít hơn khi thành công thường xuyên
+    return authData.data;
   } catch (error) {
     console.error("Error authorizing with Backblaze B2:", error);
     throw error;
@@ -43,88 +43,139 @@ async function authorizeB2() {
 }
 
 /**
- * Uploads a file to Backblaze B2 and generates a pre-signed URL for private access.
- * @param {string} localFilePath - The absolute path to the local file.
- * @param {string} originalFileName - The original name of the file (e.g., streamkey.flv).
- * @param {number} [presignedUrlDuration=3600] - Duration in seconds for which the pre-signed URL is valid (default 1 hour).
- * @returns {Promise<object>} - An object containing b2FileId, b2FileName, and a pre-signed viewableUrl.
+ * Uploads a video file (and optionally a thumbnail) buffer to Backblaze B2
+ * and generates pre-signed URLs for private access.
+ * @param {Buffer} videoBuffer - The buffer of the video file.
+ * @param {string} videoFileNameInB2 - The desired file name for the video in B2 (e.g., users/userId/vods/timestamp_originalName.mp4).
+ * @param {string} videoMimeType - The MIME type of the video file.
+ * @param {Buffer} [thumbnailBuffer] - Optional buffer of the thumbnail file.
+ * @param {string} [thumbnailFileNameInB2] - Optional desired file name for the thumbnail in B2 (e.g., users/userId/vods/timestamp_originalName_thumb.png).
+ * @param {string} [thumbnailMimeType] - Optional MIME type of the thumbnail file.
+ * @param {number} [durationSeconds=0] - Duration of the video in seconds.
+ * @param {number} [presignedUrlDurationSecs=parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 25200] - Duration for pre-signed URLs.
+ * @returns {Promise<object>} - An object containing B2 file info and pre-signed URLs for video and thumbnail.
  */
 async function uploadToB2AndGetPresignedUrl(
-  localFilePath,
-  originalFileName,
-  presignedUrlDuration = 3600
+  videoBuffer,
+  videoFileNameInB2,
+  videoMimeType,
+  thumbnailBuffer,
+  thumbnailFileNameInB2,
+  thumbnailMimeType,
+  durationSeconds = 0, // Sẽ được trả về, B2 có thể không lưu trực tiếp vào metadata chuẩn
+  presignedUrlDurationSecs = parseInt(
+    process.env.B2_PRESIGNED_URL_DURATION_SECONDS
+  ) || 25200 // 7 giờ
 ) {
   try {
-    const authData = await authorizeB2(); // Ensure we are authorized and get auth data
-    const accountDownloadUrl = authData.downloadUrl; // Base URL for downloads for this account
+    const authData = await authorizeB2();
+    const accountDownloadUrl = authData.downloadUrl;
 
-    const fileData = await fs.readFile(localFilePath);
-    const fileExtension = path.extname(originalFileName) || ".flv";
-    const baseFileName = path.basename(originalFileName, fileExtension);
-    const fileNameInB2 = `vods/${baseFileName}-${Date.now()}${fileExtension}`;
-
-    console.log(
-      `Attempting to upload ${localFilePath} as ${fileNameInB2} to bucket ${BUCKET_ID}`
-    );
-
-    const {
-      data: { uploadUrl, authorizationToken: uploadAuthToken },
-    } = await b2.getUploadUrl({ bucketId: BUCKET_ID });
-
-    const uploadedFileResponse = await b2.uploadFile({
-      uploadUrl: uploadUrl,
-      uploadAuthToken: uploadAuthToken,
-      fileName: fileNameInB2,
-      data: fileData,
+    // --- Upload Video ---
+    const { data: videoUploadUrlData } = await b2.getUploadUrl({
+      bucketId: BUCKET_ID,
+    });
+    const uploadedVideoResponse = await b2.uploadFile({
+      uploadUrl: videoUploadUrlData.uploadUrl,
+      uploadAuthToken: videoUploadUrlData.authorizationToken,
+      fileName: videoFileNameInB2,
+      data: videoBuffer,
+      mime: videoMimeType,
+      info: {
+        // Thông tin tùy chỉnh có thể thêm vào đây nếu cần (B2 hỗ trợ 'b2-content-disposition', 'b2-cache-control', v.v...)
+        // 'duration': durationSeconds.toString() // Ví dụ, nếu muốn thử lưu duration
+      },
       onUploadProgress: (event) => {
-        if (event.bytesLoaded && event.totalBytes) {
-          const percent = Math.round(
-            (event.bytesLoaded / event.totalBytes) * 100
-          );
-          console.log(`Upload progress for ${fileNameInB2}: ${percent}%`);
-        }
+        // Optional: log progress
       },
     });
-
-    const b2FileId = uploadedFileResponse.data.fileId;
-    const b2FileName = uploadedFileResponse.data.fileName;
-
+    const videoB2FileId = uploadedVideoResponse.data.fileId;
+    const videoB2FileName = uploadedVideoResponse.data.fileName;
     console.log(
-      `File ${b2FileName} (ID: ${b2FileId}) uploaded successfully to B2.`
+      `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2.`
     );
 
-    // Generate a pre-signed URL for the private file
-    const {
-      data: { authorizationToken: downloadAuthToken },
-    } = await b2.getDownloadAuthorization({
+    // --- Generate Pre-signed URL for Video ---
+    const { data: videoDownloadAuth } = await b2.getDownloadAuthorization({
       bucketId: BUCKET_ID,
-      fileNamePrefix: b2FileName, // Authorize this specific file
-      validDurationInSeconds: presignedUrlDuration, // e.g., 1 hour
+      fileNamePrefix: videoB2FileName,
+      validDurationInSeconds: presignedUrlDurationSecs,
     });
-
-    // Construct the pre-signed URL
-    // Format: <accountDownloadUrl>/file/<bucketName>/<fileName>?Authorization=<downloadAuthToken>
-    const viewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${downloadAuthToken}`;
-
-    console.log(
-      `Generated pre-signed URL (valid for ${presignedUrlDuration}s): ${viewableUrl}`
+    const videoViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${videoB2FileName}?Authorization=${videoDownloadAuth.authorizationToken}`;
+    const videoUrlExpiresAt = new Date(
+      Date.now() + presignedUrlDurationSecs * 1000
     );
+
+    let thumbnailB2FileId = null;
+    let thumbnailB2FileName = null;
+    let thumbnailViewableUrl = null;
+    let thumbnailUrlExpiresAt = null;
+
+    // --- Upload Thumbnail (if provided) ---
+    if (thumbnailBuffer && thumbnailFileNameInB2 && thumbnailMimeType) {
+      const { data: thumbUploadUrlData } = await b2.getUploadUrl({
+        bucketId: BUCKET_ID,
+      });
+      const uploadedThumbResponse = await b2.uploadFile({
+        uploadUrl: thumbUploadUrlData.uploadUrl,
+        uploadAuthToken: thumbUploadUrlData.authorizationToken,
+        fileName: thumbnailFileNameInB2,
+        data: thumbnailBuffer,
+        mime: thumbnailMimeType,
+      });
+      thumbnailB2FileId = uploadedThumbResponse.data.fileId;
+      thumbnailB2FileName = uploadedThumbResponse.data.fileName;
+      console.log(
+        `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2.`
+      );
+
+      // --- Generate Pre-signed URL for Thumbnail ---
+      const { data: thumbDownloadAuth } = await b2.getDownloadAuthorization({
+        bucketId: BUCKET_ID,
+        fileNamePrefix: thumbnailB2FileName,
+        validDurationInSeconds: presignedUrlDurationSecs,
+      });
+      thumbnailViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${thumbnailB2FileName}?Authorization=${thumbDownloadAuth.authorizationToken}`;
+      thumbnailUrlExpiresAt = new Date(
+        Date.now() + presignedUrlDurationSecs * 1000
+      );
+    }
 
     return {
-      b2FileId,
-      b2FileName,
-      viewableUrl, // This is the pre-signed URL
-      message: "File uploaded successfully to B2 and pre-signed URL generated.",
+      video: {
+        b2FileId: videoB2FileId,
+        b2FileName: videoB2FileName,
+        url: videoViewableUrl,
+        urlExpiresAt: videoUrlExpiresAt,
+        mimeType: videoMimeType,
+        durationSeconds: durationSeconds, // Trả về duration đã nhận
+      },
+      thumbnail: thumbnailB2FileId
+        ? {
+            b2FileId: thumbnailB2FileId,
+            b2FileName: thumbnailB2FileName,
+            url: thumbnailViewableUrl,
+            urlExpiresAt: thumbnailUrlExpiresAt,
+            mimeType: thumbnailMimeType,
+          }
+        : null,
+      message: "Files uploaded successfully and pre-signed URLs generated.",
     };
   } catch (error) {
     console.error(
-      `Error in B2 service for file ${localFilePath}:`,
+      `Error in B2 service for video ${videoFileNameInB2}:`,
       error.message
     );
     if (error.isAxiosError && error.response && error.response.data) {
       console.error("B2 API Error Details:", error.response.data);
     }
-    throw new Error(`B2 service error: ${error.message}`);
+    // Gắn thêm thông tin để controller có thể cố gắng dọn dẹp
+    let errorToThrow = new Error(`B2 service error: ${error.message}`);
+    if (error.b2FileIdToDelete)
+      errorToThrow.b2FileIdToDelete = error.b2FileIdToDelete;
+    if (error.b2FileNameToDelete)
+      errorToThrow.b2FileNameToDelete = error.b2FileNameToDelete;
+    throw errorToThrow;
   }
 }
 
