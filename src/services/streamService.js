@@ -147,65 +147,191 @@ export const createStreamWithThumbnailService = async ({
 };
 
 /**
- * Cập nhật thông tin stream.
+ * Cập nhật thông tin stream, bao gồm cả thumbnail.
  * @param {number} streamId - ID của stream cần cập nhật.
  * @param {number} currentUserId - ID của người dùng hiện tại thực hiện yêu cầu.
- * @param {object} updateData - Dữ liệu cần cập nhật (title, description, status).
- * @returns {Promise<object>} Thông tin stream đã cập nhật.
- * @throws {Error} Nếu stream không tìm thấy, người dùng không có quyền, hoặc lỗi cập nhật.
+ * @param {object} updateData - Dữ liệu cần cập nhật.
+ * @param {string} [updateData.title] - Tiêu đề mới.
+ * @param {string} [updateData.description] - Mô tả mới.
+ * @param {string} [updateData.status] - Trạng thái mới ('live', 'ended').
+ * @param {string} [updateData.thumbnailFilePath] - Đường dẫn file thumbnail tạm mới (nếu có).
+ * @param {string} [updateData.originalThumbnailFileName] - Tên file thumbnail gốc mới (nếu có).
+ * @param {string} [updateData.thumbnailMimeType] - Mime type của thumbnail mới (nếu có).
+ * @returns {Promise<Stream>} Thông tin stream đã cập nhật.
+ * @throws {AppError} Nếu có lỗi xảy ra.
  */
 export const updateStreamInfoService = async (
   streamId,
   currentUserId,
   updateData
 ) => {
+  let newB2ThumbFileIdToDeleteOnError = null;
+  let newB2ThumbFileNameToDeleteOnError = null;
+
   try {
     const stream = await Stream.findByPk(streamId);
 
     if (!stream) {
-      throw new Error("Stream not found");
+      throw new AppError("Stream not found", 404);
     }
 
     if (stream.userId !== currentUserId) {
-      throw new Error("User not authorized to update this stream");
+      throw new AppError("User not authorized to update this stream", 403);
     }
 
-    const { title, description, status } = updateData;
+    const {
+      title,
+      description,
+      status,
+      thumbnailFilePath,
+      originalThumbnailFileName,
+      thumbnailMimeType,
+    } = updateData;
 
+    // Lưu lại thông tin thumbnail cũ để xóa nếu upload thumbnail mới thành công
+    const oldB2ThumbnailFileId = stream.b2ThumbnailFileId;
+    const oldB2ThumbnailFileName = stream.b2ThumbnailFileName;
+    let newThumbnailB2Response = null;
+
+    if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
+      logger.info(
+        `Service: Có thumbnail mới được cung cấp cho stream ${streamId}: ${thumbnailFilePath}`
+      );
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      const thumbnailSize = thumbStats.size;
+
+      if (thumbnailSize > 0) {
+        const thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+        const safeOriginalThumbnailFileName = originalThumbnailFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const thumbnailFileNameInB2 = `users/${
+          stream.userId
+        }/stream_thumbnails/${Date.now()}_${safeOriginalThumbnailFileName}`;
+
+        const tempB2Response = await uploadToB2AndGetPresignedUrl(
+          null, // videoStream
+          0, // videoSize
+          null, // videoFileNameInB2
+          null, // videoMimeType
+          thumbnailStream,
+          thumbnailSize,
+          thumbnailFileNameInB2,
+          thumbnailMimeType,
+          null, // durationSeconds
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+            3600 * 24 * 7 // 7 days for image URLs
+        );
+        newThumbnailB2Response = tempB2Response.thumbnail;
+
+        if (!newThumbnailB2Response || !newThumbnailB2Response.url) {
+          logger.error(
+            "Service: Lỗi upload thumbnail mới lên B2, không có response hoặc URL."
+          );
+          throw new AppError("Không thể upload thumbnail mới lên B2.", 500);
+        }
+
+        newB2ThumbFileIdToDeleteOnError = newThumbnailB2Response.b2FileId;
+        newB2ThumbFileNameToDeleteOnError = newThumbnailB2Response.b2FileName;
+
+        // Cập nhật thông tin thumbnail mới vào stream object
+        stream.thumbnailUrl = newThumbnailB2Response.url;
+        stream.thumbnailUrlExpiresAt = newThumbnailB2Response.urlExpiresAt;
+        stream.b2ThumbnailFileId = newThumbnailB2Response.b2FileId;
+        stream.b2ThumbnailFileName = newThumbnailB2Response.b2FileName;
+
+        logger.info(
+          `Service: Upload thumbnail mới lên B2 thành công: ${newThumbnailB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn(
+          "Service: File thumbnail mới được cung cấp nhưng kích thước là 0."
+        );
+      }
+    }
+
+    // Cập nhật các trường thông tin khác
     if (title !== undefined) stream.title = title;
     if (description !== undefined) stream.description = description;
 
     if (status !== undefined && ["live", "ended"].includes(status)) {
-      stream.status = status;
-      if (status === "live" && !stream.startTime) {
-        stream.startTime = new Date();
-        stream.endTime = null;
-      }
-      if (status === "ended" && !stream.endTime) {
-        // Only set endTime if it's not already set (e.g., if it was manually ended while live)
-        // or if it's transitioning from 'live'
-        if (stream.startTime && !stream.endTime) {
-          // Ensure it was actually live
-          stream.endTime = new Date();
+      // Logic cập nhật status, startTime, endTime tương tự như trước
+      // (đã có trong file của bạn, có thể copy/paste hoặc giữ nguyên nếu nó đúng)
+      const oldStatus = stream.status;
+      if (stream.status !== status) {
+        stream.status = status;
+        if (status === "live") {
+          if (oldStatus === "ended" || !stream.startTime) {
+            stream.startTime = new Date();
+            stream.endTime = null;
+          }
+        } else if (status === "ended") {
+          if (oldStatus === "live" && !stream.endTime) {
+            stream.endTime = new Date();
+          }
         }
       }
     } else if (status !== undefined) {
-      throw new Error("Invalid status value. Must be 'live' or 'ended'.");
+      throw new AppError(
+        "Invalid status value. Must be 'live' or 'ended'.",
+        400
+      );
     }
 
     await stream.save();
+    logger.info(`Service: Stream ${streamId} đã được cập nhật thành công.`);
+
+    // Nếu upload thumbnail mới thành công và có thumbnail cũ, thì xóa thumbnail cũ trên B2
+    if (
+      newThumbnailB2Response &&
+      oldB2ThumbnailFileId &&
+      oldB2ThumbnailFileName
+    ) {
+      try {
+        logger.info(
+          `Service: Xóa thumbnail cũ ${oldB2ThumbnailFileName} (ID: ${oldB2ThumbnailFileId}) trên B2.`
+        );
+        await deleteFileFromB2(oldB2ThumbnailFileName, oldB2ThumbnailFileId);
+        logger.info(
+          `Service: Đã xóa thumbnail cũ ${oldB2ThumbnailFileName} khỏi B2.`
+        );
+      } catch (deleteError) {
+        logger.error(
+          `Service: Lỗi khi xóa thumbnail cũ ${oldB2ThumbnailFileName} trên B2: ${deleteError.message}`
+        );
+        // Không ném lỗi ở đây để không ảnh hưởng đến việc stream đã được cập nhật thành công
+        // Nhưng cần log lại để theo dõi
+      }
+    }
+
     return stream;
   } catch (error) {
-    console.error("Error in updateStreamInfoService:", error);
-    // Preserve specific error messages from checks
-    if (
-      error.message === "Stream not found" ||
-      error.message === "User not authorized to update this stream" ||
-      error.message.startsWith("Invalid status value")
-    ) {
-      throw error;
+    logger.error(
+      `Service: Lỗi trong updateStreamInfoService cho stream ${streamId}:`,
+      error
+    );
+    // Nếu upload thumbnail mới gặp lỗi, và đã upload lên B2, thì cần xóa nó đi
+    if (newB2ThumbFileIdToDeleteOnError && newB2ThumbFileNameToDeleteOnError) {
+      try {
+        logger.warn(
+          `Service: Dọn dẹp thumbnail MỚI ${newB2ThumbFileNameToDeleteOnError} trên B2 do lỗi khi cập nhật stream.`
+        );
+        await deleteFileFromB2(
+          newB2ThumbFileNameToDeleteOnError,
+          newB2ThumbFileIdToDeleteOnError
+        );
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail MỚI ${newB2ThumbFileNameToDeleteOnError} trên B2: ${deleteB2Error}`
+        );
+      }
     }
-    throw new Error("Failed to update stream: " + error.message);
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Không thể cập nhật stream: ${error.message}`,
+      error.statusCode || 500
+    );
   }
 };
 

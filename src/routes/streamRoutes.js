@@ -74,7 +74,13 @@ router.post(
 
 // PUT /api/streams/:streamId - Cập nhật stream
 // If you also want to allow thumbnail updates, this route would need similar upload middleware
-router.put("/:streamId", authenticateToken, validateUpdateStream, updateStream);
+router.put(
+  "/:streamId",
+  authenticateToken,
+  upload.single("thumbnailFile"), // Handle optional thumbnail upload
+  validateUpdateStream, // Ensure validators can handle req.body with multipart/form-data
+  updateStream
+);
 
 // GET /api/streams - Lấy danh sách stream (không yêu cầu xác thực cho route này)
 router.get("/", validateGetStreams, getStreams);
