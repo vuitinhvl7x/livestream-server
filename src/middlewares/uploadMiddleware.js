@@ -64,6 +64,11 @@ const fileFilter = (req, file, cb) => {
     allowedImageMimeTypes.includes(file.mimetype)
   ) {
     cb(null, true);
+  } else if (
+    file.fieldname === "avatarFile" &&
+    allowedImageMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
   } else {
     cb(
       new Error(

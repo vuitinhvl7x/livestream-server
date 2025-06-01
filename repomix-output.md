@@ -393,85 +393,6 @@ router.get("/:streamId/messages", authenticateToken, getChatHistory);
 export default router;
 ```
 
-## File: src/routes/streamRoutes.js
-```javascript
-import express from "express";
-import {
-  createStream,
-  updateStream,
-  getStreams,
-  getStreamById,
-} from "../controllers/streamController.js";
-import authenticateToken from "../middlewares/authMiddleware.js";
-import {
-  validateCreateStream,
-  validateUpdateStream,
-  validateGetStreams,
-  validateGetStreamById,
-} from "../validators/streamValidators.js";
-
-// Placeholder for JWT Authentication Middleware
-// In a real app, this would be imported from an auth middleware file
-// const authenticateToken = (req, res, next) => {
-//   // Example: Check for a token and verify it
-//   // For now, we'll simulate an authenticated user for development
-//   // IMPORTANT: Replace this with actual JWT authentication
-//   console.log("authenticateToken middleware called (placeholder)");
-//   if (
-//     req.headers.authorization &&
-//     req.headers.authorization.startsWith("Bearer ")
-//   ) {
-//     const token = req.headers.authorization.split(" ")[1];
-//     // In a real app, you would verify the token here
-//     // For placeholder: decode a dummy user ID if token is 'testtoken'
-//     if (token === "testtoken") {
-//       req.user = { id: 1, username: "testuser" }; // Dummy user
-//       console.log("Dummy user authenticated:", req.user);
-//     } else if (token === "testtoken2") {
-//       req.user = { id: 2, username: "anotheruser" }; // Dummy user 2
-//       console.log("Dummy user authenticated:", req.user);
-//     } else {
-//       // No actual validation, just a log for now if a token is present
-//       console.log("Token present, but no actual validation in placeholder.");
-//       // To simulate unauthenticated for other tokens, you could return 401 here.
-//       // For broader testing, let's allow it to pass through if any token is present.
-//       // req.user = { id: null }; // Or simply don't set req.user
-//     }
-//   } else {
-//     console.log("No authorization token found.");
-//     // To enforce authentication, you would return a 401 error here:
-//     // return res.status(401).json({ message: 'Authentication token required' });
-//   }
-//   next();
-// };
-
-const router = express.Router();
-
-// Validation middleware for creating a stream
-// const validateCreateStream = [ ... ];
-
-// Validation middleware for updating a stream
-// const validateUpdateStream = [ ... ];
-
-// Validation for getting streams (pagination, filtering)
-// const validateGetStreams = [ ... ];
-
-// Define routes
-// POST /api/streams - Tạo mới stream
-router.post("/", authenticateToken, validateCreateStream, createStream);
-
-// PUT /api/streams/:streamId - Cập nhật stream
-router.put("/:streamId", authenticateToken, validateUpdateStream, updateStream);
-
-// GET /api/streams - Lấy danh sách stream (không yêu cầu xác thực cho route này)
-router.get("/", validateGetStreams, getStreams);
-
-// GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
-router.get("/:streamId", validateGetStreamById, getStreamById);
-
-export default router;
-```
-
 ## File: src/services/chatService.js
 ```javascript
 import ChatMessage from "../models/mongo/ChatMessage.js";
@@ -885,202 +806,6 @@ const sequelize = new Sequelize(
 export default sequelize;
 ```
 
-## File: src/controllers/streamController.js
-```javascript
-import {
-  createStreamService,
-  updateStreamInfoService,
-  getStreamsListService,
-  getStreamDetailsService,
-} from "../services/streamService.js";
-import { validationResult } from "express-validator";
-import { v4 as uuidv4 } from "uuid";
-import { Stream, User } from "../models/index.js"; 
-
-// Endpoint Tạo Mới Stream
-export const createStream = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  try {
-    const { title, description } = req.body;
-    // userId sẽ được lấy từ req.user (do middleware authenticateToken gán vào)
-    const userId = req.user.id;
-
-    if (!userId) {
-      // This case should ideally be caught by authenticateToken middleware if it enforces auth
-      return res.status(401).json({
-        message: "User not authenticated. User ID missing from request.",
-      });
-    }
-
-    const newStream = await createStreamService(userId, title, description);
-
-    res.status(201).json({
-      message: "Stream created successfully",
-      stream: {
-        id: newStream.id,
-        userId: newStream.userId,
-        streamKey: newStream.streamKey,
-        title: newStream.title,
-        description: newStream.description,
-        status: newStream.status,
-        createdAt: newStream.createdAt,
-      },
-    });
-  } catch (error) {
-    console.error("Error in createStream controller:", error);
-    // Specific error from service can be checked if needed
-    if (error.message.startsWith("Failed to create stream")) {
-      return res
-        .status(500)
-        .json({ message: "Error creating stream", error: error.message });
-    }
-    res.status(500).json({
-      message: "An unexpected error occurred while creating the stream.",
-      error: error.message,
-    });
-  }
-};
-
-// Endpoint Cập Nhật Thông Tin Stream
-export const updateStream = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  try {
-    const { streamId } = req.params;
-    const { title, description, status } = req.body;
-    const userId = req.user.id; // From JWT middleware
-
-    if (!userId) {
-      return res.status(401).json({
-        message: "User not authenticated. User ID missing from request.",
-      });
-    }
-
-    const updatedStream = await updateStreamInfoService(
-      parseInt(streamId),
-      userId,
-      { title, description, status }
-    );
-
-    res.status(200).json({
-      message: "Stream updated successfully",
-      stream: {
-        id: updatedStream.id,
-        title: updatedStream.title,
-        description: updatedStream.description,
-        status: updatedStream.status,
-        startTime: updatedStream.startTime,
-        endTime: updatedStream.endTime,
-      },
-    });
-  } catch (error) {
-    console.error("Error in updateStream controller:", error);
-    if (error.message === "Stream not found") {
-      return res.status(404).json({ message: error.message });
-    }
-    if (error.message === "User not authorized to update this stream") {
-      return res.status(403).json({ message: error.message });
-    }
-    if (error.message.startsWith("Invalid status value")) {
-      return res.status(400).json({ message: error.message });
-    }
-    if (error.message.startsWith("Failed to update stream")) {
-      return res
-        .status(500)
-        .json({ message: "Error updating stream", error: error.message });
-    }
-    res.status(500).json({
-      message: "An unexpected error occurred while updating the stream.",
-      error: error.message,
-    });
-  }
-};
-
-// Endpoint Lấy Danh Sách Stream
-export const getStreams = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  try {
-    const { status, page, limit } = req.query;
-    const result = await getStreamsListService({ status, page, limit });
-
-    res.status(200).json({
-      message: "Streams fetched successfully",
-      totalStreams: result.totalStreams,
-      totalPages: result.totalPages,
-      currentPage: result.currentPage,
-      streams: result.streams.map((stream) => ({
-        id: stream.id,
-        title: stream.title,
-        description: stream.description,
-        status: stream.status,
-        // streamKey is sensitive, decide if it should be here
-        // streamKey: stream.streamKey,
-        startTime: stream.startTime,
-        endTime: stream.endTime,
-        viewerCount: stream.viewerCount,
-        thumbnail: stream.thumbnail,
-        user: stream.user, // user object from include
-        createdAt: stream.createdAt,
-      })),
-    });
-  } catch (error) {
-    console.error("Error in getStreams controller:", error);
-    res
-      .status(500)
-      .json({ message: "Error fetching streams", error: error.message });
-  }
-};
-
-// Endpoint Lấy Chi Tiết Một Stream
-export const getStreamById = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  try {
-    const { streamId } = req.params;
-    const stream = await getStreamDetailsService(parseInt(streamId));
-
-    if (!stream) {
-      return res.status(404).json({ message: "Stream not found" });
-    }
-
-    res.status(200).json({
-      message: "Stream details fetched successfully",
-      stream: {
-        id: stream.id,
-        title: stream.title,
-        description: stream.description,
-        status: stream.status,
-        startTime: stream.startTime,
-        endTime: stream.endTime,
-        viewerCount: stream.viewerCount,
-        thumbnail: stream.thumbnail,
-        user: stream.user, // user object from include
-        createdAt: stream.createdAt,
-      },
-    });
-  } catch (error) {
-    console.error("Error in getStreamById controller:", error);
-    res
-      .status(500)
-      .json({ message: "Error fetching stream details", error: error.message });
-  }
-};
-```
-
 ## File: src/controllers/userController.js
 ```javascript
 import { validationResult } from "express-validator";
@@ -1304,161 +1029,6 @@ export async function handleStreamRecordDone(req, res) {
     });
   }
 }
-```
-
-## File: src/middlewares/uploadMiddleware.js
-```javascript
-import multer from "multer";
-import path from "path";
-import fs from "fs"; // Thêm fs để kiểm tra và tạo thư mục
-import dotenv from "dotenv"; // Thêm dotenv
-
-dotenv.config(); // Tải biến môi trường
-
-// Đọc đường dẫn thư mục tạm từ biến môi trường
-const tempUploadDir = process.env.TMP_UPLOAD_DIR;
-
-console.log(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
-
-// Đảm bảo thư mục uploads/tmp tồn tại
-if (!fs.existsSync(tempUploadDir)) {
-  try {
-    fs.mkdirSync(tempUploadDir, { recursive: true });
-    console.log(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
-  } catch (err) {
-    console.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
-    throw new Error(`Không thể tạo thư mục upload tạm: ${tempUploadDir}`);
-  }
-}
-
-// Cấu hình lưu trữ cho multer (lưu vào ổ đĩa)
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, tempUploadDir); // Thư mục lưu file tạm
-  },
-  filename: function (req, file, cb) {
-    // Tạo tên file duy nhất để tránh ghi đè, giữ lại phần extension
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(
-      null,
-      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
-    );
-  },
-});
-
-// Hàm kiểm tra loại file (chỉ chấp nhận video và ảnh cho các field tương ứng)
-const videoFileFilter = (req, file, cb) => {
-  const allowedVideoMimeTypes = [
-    "video/mp4",
-    "video/mpeg",
-    "video/quicktime", // .mov
-    "video/x-msvideo", // .avi
-    "video/x-flv", // .flv
-    "video/webm",
-    "video/x-matroska", // .mkv
-  ];
-  const allowedImageMimeTypes = [
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-  ];
-
-  if (
-    file.fieldname === "videoFile" &&
-    allowedVideoMimeTypes.includes(file.mimetype)
-  ) {
-    cb(null, true);
-  } else if (
-    file.fieldname === "thumbnailFile" &&
-    allowedImageMimeTypes.includes(file.mimetype)
-  ) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error(
-        `Định dạng file không hợp lệ cho field ${file.fieldname}. Kiểm tra lại các định dạng được chấp nhận.`
-      ),
-      false
-    );
-  }
-};
-
-const upload = multer({
-  storage: storage,
-  fileFilter: videoFileFilter,
-  limits: {
-    fileSize: 1024 * 1024 * 500, // Giới hạn kích thước file: 500MB
-  },
-});
-
-export default upload;
-```
-
-## File: src/models/stream.js
-```javascript
-import { DataTypes } from "sequelize";
-import sequelize from "../config/database.js";
-
-const Stream = sequelize.define(
-  "Stream",
-  {
-    id: {
-      type: DataTypes.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    },
-    userId: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: "Users", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
-        key: "id",
-      },
-    },
-    streamKey: {
-      type: DataTypes.STRING,
-      unique: true,
-      allowNull: false,
-    },
-    title: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    description: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-    },
-    status: {
-      type: DataTypes.ENUM("live", "ended"),
-      defaultValue: "ended",
-      allowNull: false,
-    },
-    startTime: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    endTime: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    viewerCount: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-      allowNull: false,
-    },
-    thumbnail: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    // createdAt and updatedAt are handled by Sequelize timestamps: true
-  },
-  {
-    timestamps: true, // Enable automatic createdAt and updatedAt fields
-  }
-);
-
-export default Stream;
 ```
 
 ## File: src/routes/userRoutes.js
@@ -1808,314 +1378,6 @@ db.Sequelize = Sequelize;
 module.exports = db;
 ```
 
-## File: src/lib/b2.service.js
-```javascript
-import B2 from "backblaze-b2";
-import uploadAnyExtension from "@gideo-llc/backblaze-b2-upload-any"; // Import extension
-import fs from "fs/promises";
-import path from "path";
-import dotenv from "dotenv";
-
-dotenv.config(); // Load environment variables from .env file
-
-// Install the uploadAny extension (Intrusive way)
-uploadAnyExtension.install(B2);
-
-// Load configuration from environment variables
-const APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
-const APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const BUCKET_ID = process.env.B2_BUCKET_ID;
-const BUCKET_NAME = process.env.B2_BUCKET_NAME;
-// B2_DOWNLOAD_HOST is used if constructing URLs manually,
-// but b2.authorize() provides the most accurate downloadUrl (account's base download URL)
-
-if (!APPLICATION_KEY_ID || !APPLICATION_KEY || !BUCKET_ID || !BUCKET_NAME) {
-  console.error(
-    "Missing Backblaze B2 environment variables. Please check your .env file."
-  );
-  // Optionally, throw an error or exit if configuration is critical
-  // process.exit(1);
-}
-
-const b2 = new B2({
-  applicationKeyId: APPLICATION_KEY_ID,
-  applicationKey: APPLICATION_KEY,
-});
-
-/**
- * Authorizes with B2. This should be called before any B2 operations.
- * Returns the authorization data including the downloadUrl.
- * @returns {Promise<object>} Authorization data from B2, including downloadUrl.
- */
-async function authorizeB2() {
-  try {
-    // The intrusive install wraps authorize, so this call is important.
-    const authData = await b2.authorize();
-    return authData.data;
-  } catch (error) {
-    console.error("Error authorizing with Backblaze B2:", error);
-    throw error;
-  }
-}
-
-/**
- * Uploads a video file (and optionally a thumbnail) stream to Backblaze B2
- * using @gideo-llc/backblaze-b2-upload-any extension
- * and generates pre-signed URLs for private access.
- * @param {import('stream').Readable} videoStream - The readable stream of the video file.
- * @param {number} videoSize - The size of the video file in bytes (may not be strictly needed by uploadAny but good for context).
- * @param {string} videoFileNameInB2 - The desired file name for the video in B2.
- * @param {string} videoMimeType - The MIME type of the video file.
- * @param {import('stream').Readable} [thumbnailStream] - Optional readable stream of the thumbnail file.
- * @param {number} [thumbnailSize] - Optional size of the thumbnail file in bytes (may not be strictly needed by uploadAny).
- * @param {string} [thumbnailFileNameInB2] - Optional desired file name for the thumbnail in B2.
- * @param {string} [thumbnailMimeType] - Optional MIME type of the thumbnail file.
- * @param {number} [durationSeconds=0] - Duration of the video in seconds.
- * @param {number} [presignedUrlDurationSecs=parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 25200] - Duration for pre-signed URLs.
- * @returns {Promise<object>} - An object containing B2 file info and pre-signed URLs for video and thumbnail.
- */
-async function uploadToB2AndGetPresignedUrl(
-  videoStream,
-  videoSize, // Kept for context, uploadAny might not directly use it for streams
-  videoFileNameInB2,
-  videoMimeType,
-  thumbnailStream,
-  thumbnailSize, // Kept for context
-  thumbnailFileNameInB2,
-  thumbnailMimeType,
-  durationSeconds = 0,
-  presignedUrlDurationSecs = parseInt(
-    process.env.B2_PRESIGNED_URL_DURATION_SECONDS
-  ) || 25200
-) {
-  try {
-    const authData = await authorizeB2(); // Ensures b2 instance is authorized and extension has run its authorization wrapper
-    const accountDownloadUrl = authData.downloadUrl;
-
-    // --- Upload Video using uploadAny ---
-    console.log(
-      `Uploading video stream ${videoFileNameInB2} using uploadAny...`
-    );
-    const uploadedVideoResponse = await b2.uploadAny({
-      bucketId: BUCKET_ID,
-      fileName: videoFileNameInB2,
-      data: videoStream,
-      contentType: videoMimeType,
-      // partSize will be automatically set if using intrusive install, otherwise: authData.recommendedPartSize
-      // Other options like concurrency can be added here if needed
-    });
-    // Assuming response structure is similar to b2.uploadFile(), providing .data.fileId and .data.fileName
-    // If @gideo-llc/backblaze-b2-upload-any returns the raw b2_upload_file response, it might be directly uploadedVideoResponse.fileId
-    // Let's assume it's nested under .data for now, adjust if logs show otherwise.
-    const videoB2FileId =
-      uploadedVideoResponse.fileId || uploadedVideoResponse.data?.fileId;
-    const videoB2FileName =
-      uploadedVideoResponse.fileName || uploadedVideoResponse.data?.fileName;
-
-    if (!videoB2FileId || !videoB2FileName) {
-      console.error(
-        "uploadAny video response missing fileId or fileName:",
-        uploadedVideoResponse
-      );
-      throw new Error(
-        "Failed to get fileId or fileName from B2 uploadAny video response."
-      );
-    }
-    console.log(
-      `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2 via uploadAny.`
-    );
-
-    // --- Generate Pre-signed URL for Video ---
-    const { data: videoDownloadAuth } = await b2.getDownloadAuthorization({
-      bucketId: BUCKET_ID,
-      fileNamePrefix: videoB2FileName,
-      validDurationInSeconds: presignedUrlDurationSecs,
-    });
-    const videoViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${videoB2FileName}?Authorization=${videoDownloadAuth.authorizationToken}`;
-    const videoUrlExpiresAt = new Date(
-      Date.now() + presignedUrlDurationSecs * 1000
-    );
-
-    let thumbnailB2FileId = null;
-    let thumbnailB2FileName = null;
-    let thumbnailViewableUrl = null;
-    let thumbnailUrlExpiresAt = null;
-
-    // --- Upload Thumbnail using uploadAny (if provided) ---
-    if (
-      thumbnailStream &&
-      thumbnailFileNameInB2 &&
-      thumbnailMimeType &&
-      thumbnailSize > 0 // Keep size check logic as a basic validation
-    ) {
-      console.log(
-        `Uploading thumbnail stream ${thumbnailFileNameInB2} using uploadAny...`
-      );
-      const uploadedThumbResponse = await b2.uploadAny({
-        bucketId: BUCKET_ID,
-        fileName: thumbnailFileNameInB2,
-        data: thumbnailStream,
-        contentType: thumbnailMimeType,
-      });
-      thumbnailB2FileId =
-        uploadedThumbResponse.fileId || uploadedThumbResponse.data?.fileId;
-      thumbnailB2FileName =
-        uploadedThumbResponse.fileName || uploadedThumbResponse.data?.fileName;
-
-      if (!thumbnailB2FileId || !thumbnailB2FileName) {
-        console.error(
-          "uploadAny thumbnail response missing fileId or fileName:",
-          uploadedThumbResponse
-        );
-        throw new Error(
-          "Failed to get fileId or fileName from B2 uploadAny thumbnail response."
-        );
-      }
-      console.log(
-        `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2 via uploadAny.`
-      );
-
-      // --- Generate Pre-signed URL for Thumbnail ---
-      const { data: thumbDownloadAuth } = await b2.getDownloadAuthorization({
-        bucketId: BUCKET_ID,
-        fileNamePrefix: thumbnailB2FileName,
-        validDurationInSeconds: presignedUrlDurationSecs,
-      });
-      thumbnailViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${thumbnailB2FileName}?Authorization=${thumbDownloadAuth.authorizationToken}`;
-      thumbnailUrlExpiresAt = new Date(
-        Date.now() + presignedUrlDurationSecs * 1000
-      );
-    }
-
-    return {
-      video: {
-        b2FileId: videoB2FileId,
-        b2FileName: videoB2FileName,
-        url: videoViewableUrl,
-        urlExpiresAt: videoUrlExpiresAt,
-        mimeType: videoMimeType,
-        durationSeconds: durationSeconds, // Trả về duration đã nhận
-      },
-      thumbnail: thumbnailB2FileId
-        ? {
-            b2FileId: thumbnailB2FileId,
-            b2FileName: thumbnailB2FileName,
-            url: thumbnailViewableUrl,
-            urlExpiresAt: thumbnailUrlExpiresAt,
-            mimeType: thumbnailMimeType,
-          }
-        : null,
-      message: "Files uploaded successfully and pre-signed URLs generated.",
-    };
-  } catch (error) {
-    console.error(
-      `Error in B2 service for video ${videoFileNameInB2}:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details:", error.response.data);
-    }
-    // Gắn thêm thông tin để controller có thể cố gắng dọn dẹp
-    let errorToThrow = new Error(`B2 service error: ${error.message}`);
-    if (error.b2FileIdToDelete)
-      errorToThrow.b2FileIdToDelete = error.b2FileIdToDelete;
-    if (error.b2FileNameToDelete)
-      errorToThrow.b2FileNameToDelete = error.b2FileNameToDelete;
-    throw errorToThrow;
-  }
-}
-
-/**
- * Generates a new pre-signed URL for an existing private file in B2.
- * @param {string} b2FileName - The name of the file in B2 (e.g., vods/streamkey-timestamp.flv).
- * @param {number} [presignedUrlDuration=3600] - Duration in seconds for which the new URL is valid.
- * @returns {Promise<string>} - The new pre-signed URL.
- */
-async function generatePresignedUrlForExistingFile(
-  b2FileName,
-  presignedUrlDuration = 3600
-) {
-  try {
-    const authData = await authorizeB2();
-    const accountDownloadUrl = authData.downloadUrl;
-
-    const {
-      data: { authorizationToken: newDownloadAuthToken },
-    } = await b2.getDownloadAuthorization({
-      bucketId: BUCKET_ID,
-      fileNamePrefix: b2FileName,
-      validDurationInSeconds: presignedUrlDuration,
-    });
-
-    const newViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${newDownloadAuthToken}`;
-
-    console.log(
-      `Generated new pre-signed URL for ${b2FileName} (valid for ${presignedUrlDuration}s): ${newViewableUrl}`
-    );
-    return newViewableUrl;
-  } catch (error) {
-    console.error(
-      `Error generating new pre-signed URL for ${b2FileName}:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details:", error.response.data);
-    }
-    throw new Error(
-      `Failed to generate new pre-signed URL for ${b2FileName}: ${error.message}`
-    );
-  }
-}
-
-/**
- * Deletes a file from Backblaze B2.
- * @param {string} fileName - The name of the file in B2.
- * @param {string} fileId - The ID of the file in B2.
- * @returns {Promise<object>} - Confirmation from B2.
- */
-async function deleteFileFromB2(fileName, fileId) {
-  try {
-    await authorizeB2(); // Ensure we are authorized
-
-    console.log(
-      `Attempting to delete file ${fileName} (ID: ${fileId}) from B2.`
-    );
-
-    const response = await b2.deleteFileVersion({
-      fileName: fileName,
-      fileId: fileId,
-    });
-
-    console.log(
-      `File ${fileName} (ID: ${fileId}) deleted successfully from B2.`
-    );
-    return response.data;
-  } catch (error) {
-    console.error(
-      `Error deleting file ${fileName} (ID: ${fileId}) from B2:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details for delete:", error.response.data);
-    }
-    // Decide if you want to throw an error that stops the VOD deletion process
-    // or just log it and proceed with DB deletion.
-    // For now, let's throw to indicate B2 deletion failure.
-    throw new Error(
-      `Failed to delete file ${fileName} from B2: ${error.message}`
-    );
-  }
-}
-
-// Export the main function to be used by other services
-export {
-  uploadToB2AndGetPresignedUrl,
-  authorizeB2,
-  generatePresignedUrlForExistingFile,
-  deleteFileFromB2,
-};
-```
-
 ## File: src/middlewares/authMiddleware.js
 ```javascript
 import jwt from "jsonwebtoken";
@@ -2207,6 +1469,268 @@ export function verifyWebhookTokenInParam(req, res, next) {
 }
 ```
 
+## File: src/middlewares/uploadMiddleware.js
+```javascript
+import multer from "multer";
+import path from "path";
+import fs from "fs"; // Thêm fs để kiểm tra và tạo thư mục
+import dotenv from "dotenv"; // Thêm dotenv
+
+dotenv.config(); // Tải biến môi trường
+
+// Đọc đường dẫn thư mục tạm từ biến môi trường
+const tempUploadDir = process.env.TMP_UPLOAD_DIR;
+
+console.log(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
+
+// Đảm bảo thư mục uploads/tmp tồn tại
+if (!fs.existsSync(tempUploadDir)) {
+  try {
+    fs.mkdirSync(tempUploadDir, { recursive: true });
+    console.log(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
+  } catch (err) {
+    console.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
+    throw new Error(`Không thể tạo thư mục upload tạm: ${tempUploadDir}`);
+  }
+}
+
+// Cấu hình lưu trữ cho multer (lưu vào ổ đĩa)
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, tempUploadDir); // Thư mục lưu file tạm
+  },
+  filename: function (req, file, cb) {
+    // Tạo tên file duy nhất để tránh ghi đè, giữ lại phần extension
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(
+      null,
+      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
+    );
+  },
+});
+
+// Hàm kiểm tra loại file (chỉ chấp nhận video và ảnh cho các field tương ứng)
+const fileFilter = (req, file, cb) => {
+  const allowedVideoMimeTypes = [
+    "video/mp4",
+    "video/mpeg",
+    "video/quicktime", // .mov
+    "video/x-msvideo", // .avi
+    "video/x-flv", // .flv
+    "video/webm",
+    "video/x-matroska", // .mkv
+  ];
+  const allowedImageMimeTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+  ];
+
+  if (
+    file.fieldname === "videoFile" &&
+    allowedVideoMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else if (
+    file.fieldname === "thumbnailFile" &&
+    allowedImageMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error(
+        `Định dạng file không hợp lệ cho field ${file.fieldname}. Kiểm tra lại các định dạng được chấp nhận.`
+      ),
+      false
+    );
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 1024 * 1024 * 500, // Giới hạn kích thước file: 500MB
+  },
+});
+
+export default upload;
+```
+
+## File: src/models/stream.js
+```javascript
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
+
+const Stream = sequelize.define(
+  "Stream",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
+        key: "id",
+      },
+    },
+    streamKey: {
+      type: DataTypes.STRING,
+      unique: true,
+      allowNull: false,
+    },
+    title: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    status: {
+      type: DataTypes.ENUM("live", "ended"),
+      defaultValue: "ended",
+      allowNull: false,
+    },
+    startTime: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    endTime: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    viewerCount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      allowNull: false,
+    },
+    thumbnailUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    thumbnailUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    b2ThumbnailFileId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    b2ThumbnailFileName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    // createdAt and updatedAt are handled by Sequelize timestamps: true
+  },
+  {
+    timestamps: true, // Enable automatic createdAt and updatedAt fields
+  }
+);
+
+export default Stream;
+```
+
+## File: src/routes/streamRoutes.js
+```javascript
+import express from "express";
+import {
+  createStream,
+  updateStream,
+  getStreams,
+  getStreamById,
+} from "../controllers/streamController.js";
+import authenticateToken from "../middlewares/authMiddleware.js";
+import upload from "../middlewares/uploadMiddleware.js";
+import {
+  validateCreateStream,
+  validateUpdateStream,
+  validateGetStreams,
+  validateGetStreamById,
+} from "../validators/streamValidators.js";
+
+// Placeholder for JWT Authentication Middleware
+// In a real app, this would be imported from an auth middleware file
+// const authenticateToken = (req, res, next) => {
+//   // Example: Check for a token and verify it
+//   // For now, we'll simulate an authenticated user for development
+//   // IMPORTANT: Replace this with actual JWT authentication
+//   console.log("authenticateToken middleware called (placeholder)");
+//   if (
+//     req.headers.authorization &&
+//     req.headers.authorization.startsWith("Bearer ")
+//   ) {
+//     const token = req.headers.authorization.split(" ")[1];
+//     // In a real app, you would verify the token here
+//     // For placeholder: decode a dummy user ID if token is 'testtoken'
+//     if (token === "testtoken") {
+//       req.user = { id: 1, username: "testuser" }; // Dummy user
+//       console.log("Dummy user authenticated:", req.user);
+//     } else if (token === "testtoken2") {
+//       req.user = { id: 2, username: "anotheruser" }; // Dummy user 2
+//       console.log("Dummy user authenticated:", req.user);
+//     } else {
+//       // No actual validation, just a log for now if a token is present
+//       console.log("Token present, but no actual validation in placeholder.");
+//       // To simulate unauthenticated for other tokens, you could return 401 here.
+//       // For broader testing, let's allow it to pass through if any token is present.
+//       // req.user = { id: null }; // Or simply don't set req.user
+//     }
+//   } else {
+//     console.log("No authorization token found.");
+//     // To enforce authentication, you would return a 401 error here:
+//     // return res.status(401).json({ message: 'Authentication token required' });
+//   }
+//   next();
+// };
+
+const router = express.Router();
+
+// Validation middleware for creating a stream
+// const validateCreateStream = [ ... ];
+
+// Validation middleware for updating a stream
+// const validateUpdateStream = [ ... ];
+
+// Validation for getting streams (pagination, filtering)
+// const validateGetStreams = [ ... ];
+
+// Define routes
+// POST /api/streams - Tạo mới stream
+// Use upload.single('thumbnailFile') to handle a single file upload for the thumbnail
+// The field name in the form-data should be 'thumbnailFile'
+router.post(
+  "/",
+  authenticateToken,
+  upload.single("thumbnailFile"), // Handle thumbnail upload first
+  validateCreateStream, // Ensure validators can handle req.body with multipart/form-data
+  createStream
+);
+
+// PUT /api/streams/:streamId - Cập nhật stream
+// If you also want to allow thumbnail updates, this route would need similar upload middleware
+router.put(
+  "/:streamId",
+  authenticateToken,
+  upload.single("thumbnailFile"), // Handle optional thumbnail upload
+  validateUpdateStream, // Ensure validators can handle req.body with multipart/form-data
+  updateStream
+);
+
+// GET /api/streams - Lấy danh sách stream (không yêu cầu xác thực cho route này)
+router.get("/", validateGetStreams, getStreams);
+
+// GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
+router.get("/:streamId", validateGetStreamById, getStreamById);
+
+export default router;
+```
+
 ## File: src/routes/webhookRoutes.js
 ```javascript
 import express from "express";
@@ -2236,217 +1760,6 @@ router.post(
 );
 
 export default router;
-```
-
-## File: src/services/streamService.js
-```javascript
-import { v4 as uuidv4 } from "uuid";
-import { Stream, User } from "../models/index.js";
-import { Op } from "sequelize"; // For more complex queries if needed later
-
-/**
- * Tạo mới một stream.
- * @param {number} userId - ID của người dùng tạo stream.
- * @param {string} title - Tiêu đề của stream.
- * @param {string} description - Mô tả của stream.
- * @returns {Promise<object>} Thông tin stream đã tạo.
- * @throws {Error} Nếu có lỗi xảy ra.
- */
-export const createStreamService = async (userId, title, description) => {
-  try {
-    const streamKey = uuidv4();
-    const newStream = await Stream.create({
-      userId,
-      streamKey,
-      title,
-      description,
-      status: "ended", // Mặc định là 'ended'
-    });
-    return newStream;
-  } catch (error) {
-    console.error("Error in createStreamService:", error);
-    throw new Error("Failed to create stream: " + error.message);
-  }
-};
-
-/**
- * Cập nhật thông tin stream.
- * @param {number} streamId - ID của stream cần cập nhật.
- * @param {number} currentUserId - ID của người dùng hiện tại thực hiện yêu cầu.
- * @param {object} updateData - Dữ liệu cần cập nhật (title, description, status).
- * @returns {Promise<object>} Thông tin stream đã cập nhật.
- * @throws {Error} Nếu stream không tìm thấy, người dùng không có quyền, hoặc lỗi cập nhật.
- */
-export const updateStreamInfoService = async (
-  streamId,
-  currentUserId,
-  updateData
-) => {
-  try {
-    const stream = await Stream.findByPk(streamId);
-
-    if (!stream) {
-      throw new Error("Stream not found");
-    }
-
-    if (stream.userId !== currentUserId) {
-      throw new Error("User not authorized to update this stream");
-    }
-
-    const { title, description, status } = updateData;
-
-    if (title !== undefined) stream.title = title;
-    if (description !== undefined) stream.description = description;
-
-    if (status !== undefined && ["live", "ended"].includes(status)) {
-      stream.status = status;
-      if (status === "live" && !stream.startTime) {
-        stream.startTime = new Date();
-        stream.endTime = null;
-      }
-      if (status === "ended" && !stream.endTime) {
-        // Only set endTime if it's not already set (e.g., if it was manually ended while live)
-        // or if it's transitioning from 'live'
-        if (stream.startTime && !stream.endTime) {
-          // Ensure it was actually live
-          stream.endTime = new Date();
-        }
-      }
-    } else if (status !== undefined) {
-      throw new Error("Invalid status value. Must be 'live' or 'ended'.");
-    }
-
-    await stream.save();
-    return stream;
-  } catch (error) {
-    console.error("Error in updateStreamInfoService:", error);
-    // Preserve specific error messages from checks
-    if (
-      error.message === "Stream not found" ||
-      error.message === "User not authorized to update this stream" ||
-      error.message.startsWith("Invalid status value")
-    ) {
-      throw error;
-    }
-    throw new Error("Failed to update stream: " + error.message);
-  }
-};
-
-/**
- * Lấy danh sách các stream.
- * @param {object} queryParams - Tham số query (status, page, limit).
- * @returns {Promise<object>} Danh sách stream và thông tin phân trang.
- * @throws {Error} Nếu có lỗi xảy ra.
- */
-export const getStreamsListService = async (queryParams) => {
-  try {
-    const { status, page = 1, limit = 10 } = queryParams;
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-
-    const whereClause = {};
-    if (status && ["live", "ended"].includes(status)) {
-      whereClause.status = status;
-    }
-
-    const { count, rows } = await Stream.findAndCountAll({
-      where: whereClause,
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
-      order: [["createdAt", "DESC"]],
-      limit: parseInt(limit, 10),
-      offset: offset,
-      distinct: true, // Important for count when using include with hasMany
-    });
-
-    return {
-      totalStreams: count,
-      totalPages: Math.ceil(count / parseInt(limit, 10)),
-      currentPage: parseInt(page, 10),
-      streams: rows,
-    };
-  } catch (error) {
-    console.error("Error in getStreamsListService:", error);
-    throw new Error("Failed to fetch streams: " + error.message);
-  }
-};
-
-/**
- * Lấy chi tiết một stream.
- * @param {number} streamId - ID của stream.
- * @returns {Promise<object|null>} Thông tin stream hoặc null nếu không tìm thấy.
- * @throws {Error} Nếu có lỗi xảy ra.
- */
-export const getStreamDetailsService = async (streamId) => {
-  try {
-    const stream = await Stream.findByPk(streamId, {
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
-    });
-    return stream; // Returns null if not found, controller will handle 404
-  } catch (error) {
-    console.error("Error in getStreamDetailsService:", error);
-    throw new Error("Failed to fetch stream details: " + error.message);
-  }
-};
-
-/**
- * Đánh dấu stream là live.
- * @param {string} streamKey - Khóa của stream.
- * @returns {Promise<void>}
- * @throws {Error} Nếu có lỗi xảy ra.
- */
-export const markLive = async (streamKey) => {
-  try {
-    const [updatedRows] = await Stream.update(
-      { status: "live", startTime: new Date(), endTime: null }, // endTime: null để reset nếu stream đã kết thúc trước đó
-      { where: { streamKey } }
-    );
-    if (updatedRows === 0) {
-      console.warn(
-        `markLive: Stream with key ${streamKey} not found or no change needed.`
-      );
-      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
-      // throw new Error(`Stream with key ${streamKey} not found.`);
-    }
-    console.log(`Stream ${streamKey} marked as live.`);
-  } catch (error) {
-    console.error(`Error in markLive for stream ${streamKey}:`, error);
-    throw new Error("Failed to mark stream as live: " + error.message);
-  }
-};
-
-/**
- * Đánh dấu stream là đã kết thúc.
- * @param {string} streamKey - Khóa của stream.
- * @param {number} [viewerCount] - Số lượng người xem (nếu có).
- * @returns {Promise<void>}
- * @throws {Error} Nếu có lỗi xảy ra.
- */
-export const markEnded = async (streamKey, viewerCount) => {
-  try {
-    const updatePayload = {
-      status: "ended",
-      endTime: new Date(),
-    };
-    if (viewerCount !== undefined && !isNaN(parseInt(viewerCount))) {
-      updatePayload.viewerCount = parseInt(viewerCount);
-    }
-
-    const [updatedRows] = await Stream.update(updatePayload, {
-      where: { streamKey },
-    });
-
-    if (updatedRows === 0) {
-      console.warn(
-        `markEnded: Stream with key ${streamKey} not found or no change needed.`
-      );
-      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
-      // throw new Error(`Stream with key ${streamKey} not found.`);
-    }
-    console.log(`Stream ${streamKey} marked as ended.`);
-  } catch (error) {
-    console.error(`Error in markEnded for stream ${streamKey}:`, error);
-    throw new Error("Failed to mark stream as ended: " + error.message);
-  }
-};
 ```
 
 ## File: src/services/userService.js
@@ -2495,6 +1808,296 @@ export const loginUser = async (username, password) => {
     return { user, token };
   } catch (error) {
     throw new Error("Error logging in: " + error.message);
+  }
+};
+```
+
+## File: src/controllers/streamController.js
+```javascript
+import {
+  createStreamWithThumbnailService,
+  updateStreamInfoService,
+  getStreamsListService,
+  getStreamDetailsService,
+} from "../services/streamService.js";
+import { validationResult, matchedData } from "express-validator";
+import { v4 as uuidv4 } from "uuid";
+import { Stream, User } from "../models/index.js";
+import { AppError } from "../utils/errorHandler.js";
+import fs from "fs/promises";
+import path from "path";
+
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+// Endpoint Tạo Mới Stream (with thumbnail upload)
+export const createStream = async (req, res, next) => {
+  let thumbnailFilePathTemp = null;
+
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) {
+        await fs.unlink(req.file.path);
+      }
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id;
+
+    if (!userId) {
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    const { title, description } = validatedData;
+    let thumbnailFile = null;
+
+    if (req.file && req.file.fieldname === "thumbnailFile") {
+      thumbnailFile = req.file;
+      thumbnailFilePathTemp = thumbnailFile.path;
+    }
+
+    const servicePayload = {
+      userId,
+      title,
+      description,
+      thumbnailFilePath: thumbnailFile?.path,
+      originalThumbnailFileName: thumbnailFile?.originalname,
+      thumbnailMimeType: thumbnailFile?.mimetype,
+    };
+
+    logger.info(
+      `Controller: Gọi createStreamWithThumbnailService với payload cho user: ${userId}`,
+      {
+        title: servicePayload.title,
+        hasThumbnail: !!servicePayload.thumbnailFilePath,
+      }
+    );
+
+    const newStream = await createStreamWithThumbnailService(servicePayload);
+
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
+        );
+        thumbnailFilePathTemp = null;
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp} sau khi service thành công: `,
+          unlinkError
+        );
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Stream created successfully",
+      data: newStream,
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi tạo stream:", error);
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (trong catch): ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (trong catch) ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    next(error);
+  }
+};
+
+// Endpoint Cập Nhật Thông Tin Stream
+export const updateStream = async (req, res, next) => {
+  let thumbnailFilePathTemp = null; // For cleaning up temp file
+
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) {
+        // If validation fails after file upload
+        await fs.unlink(req.file.path);
+      }
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const { streamId } = req.params;
+    const validatedData = matchedData(req); // title, description, status from body
+    const currentUserId = req.user?.id;
+
+    if (!currentUserId) {
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    const id = parseInt(streamId);
+    if (isNaN(id)) {
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Stream ID phải là một số.", 400);
+    }
+
+    let thumbnailFile = null;
+    if (req.file && req.file.fieldname === "thumbnailFile") {
+      thumbnailFile = req.file;
+      thumbnailFilePathTemp = thumbnailFile.path; // Lưu để xóa
+    }
+
+    const servicePayload = {
+      ...validatedData, // title, description, status
+      thumbnailFilePath: thumbnailFile?.path,
+      originalThumbnailFileName: thumbnailFile?.originalname,
+      thumbnailMimeType: thumbnailFile?.mimetype,
+    };
+
+    logger.info(
+      `Controller: Gọi updateStreamInfoService cho stream ${id} bởi user ${currentUserId}`,
+      {
+        updates: servicePayload.title, // just an example field to log
+        hasNewThumbnail: !!servicePayload.thumbnailFilePath,
+      }
+    );
+
+    const updatedStream = await updateStreamInfoService(
+      id,
+      currentUserId,
+      servicePayload
+    );
+
+    // Xóa file thumbnail tạm (nếu có) sau khi service thành công
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (update): ${thumbnailFilePathTemp}`
+        );
+        thumbnailFilePathTemp = null; // Reset để không xóa lại trong finally/catch
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (update) ${thumbnailFilePathTemp} sau khi service thành công: `,
+          unlinkError
+        );
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Stream updated successfully",
+      data: updatedStream, // Trả về stream đã được cập nhật, bao gồm cả thumbnail URL mới nếu có
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi cập nhật stream:", error);
+    // Đảm bảo file tạm được xóa nếu có lỗi
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (update, trong catch): ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (update, trong catch) ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    next(error); // Chuyển lỗi cho error handling middleware
+  }
+};
+
+// Endpoint Lấy Danh Sách Stream
+export const getStreams = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  try {
+    const { status, page, limit } = req.query;
+    const result = await getStreamsListService({ status, page, limit });
+
+    res.status(200).json({
+      message: "Streams fetched successfully",
+      totalStreams: result.totalStreams,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      streams: result.streams.map((stream) => ({
+        id: stream.id,
+        title: stream.title,
+        description: stream.description,
+        status: stream.status,
+        startTime: stream.startTime,
+        endTime: stream.endTime,
+        viewerCount: stream.viewerCount,
+        thumbnailUrl: stream.thumbnailUrl,
+        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
+        user: stream.user,
+        createdAt: stream.createdAt,
+      })),
+    });
+  } catch (error) {
+    logger.error("Error in getStreams controller:", error);
+    res
+      .status(500)
+      .json({ message: "Error fetching streams", error: error.message });
+  }
+};
+
+// Endpoint Lấy Chi Tiết Một Stream
+export const getStreamById = async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const firstError = errors.array({ onlyFirstError: true })[0];
+    return next(new AppError(`Validation failed: ${firstError.msg}`, 400));
+  }
+
+  try {
+    const { streamId } = req.params;
+    const id = parseInt(streamId);
+    if (isNaN(id)) {
+      return next(new AppError("Stream ID must be a number.", 400));
+    }
+
+    const stream = await getStreamDetailsService(id);
+
+    if (!stream) {
+      return next(new AppError("Stream not found", 404));
+    }
+
+    res.status(200).json({
+      message: "Stream details fetched successfully",
+      stream: {
+        id: stream.id,
+        title: stream.title,
+        description: stream.description,
+        status: stream.status,
+        startTime: stream.startTime,
+        endTime: stream.endTime,
+        viewerCount: stream.viewerCount,
+        thumbnailUrl: stream.thumbnailUrl,
+        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
+        streamKey: stream.streamKey,
+        user: stream.user,
+        createdAt: stream.createdAt,
+        updatedAt: stream.updatedAt,
+      },
+    });
+  } catch (error) {
+    logger.error("Error in getStreamById controller:", error);
+    next(error);
   }
 };
 ```
@@ -2839,6 +2442,329 @@ export const vodController = {
   getVODDetails,
   removeVOD,
   refreshVODSignedUrl,
+};
+```
+
+## File: src/lib/b2.service.js
+```javascript
+import B2 from "backblaze-b2";
+import uploadAnyExtension from "@gideo-llc/backblaze-b2-upload-any"; // Import extension
+import fs from "fs/promises";
+import path from "path";
+import dotenv from "dotenv";
+
+dotenv.config(); // Load environment variables from .env file
+
+// Install the uploadAny extension (Intrusive way)
+uploadAnyExtension.install(B2);
+
+// Load configuration from environment variables
+const APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
+const APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
+const BUCKET_ID = process.env.B2_BUCKET_ID;
+const BUCKET_NAME = process.env.B2_BUCKET_NAME;
+// B2_DOWNLOAD_HOST is used if constructing URLs manually,
+// but b2.authorize() provides the most accurate downloadUrl (account's base download URL)
+
+if (!APPLICATION_KEY_ID || !APPLICATION_KEY || !BUCKET_ID || !BUCKET_NAME) {
+  console.error(
+    "Missing Backblaze B2 environment variables. Please check your .env file."
+  );
+  // Optionally, throw an error or exit if configuration is critical
+  // process.exit(1);
+}
+
+const b2 = new B2({
+  applicationKeyId: APPLICATION_KEY_ID,
+  applicationKey: APPLICATION_KEY,
+});
+
+/**
+ * Authorizes with B2. This should be called before any B2 operations.
+ * Returns the authorization data including the downloadUrl.
+ * @returns {Promise<object>} Authorization data from B2, including downloadUrl.
+ */
+async function authorizeB2() {
+  try {
+    const authData = await b2.authorize();
+    return authData.data;
+  } catch (error) {
+    console.error("Error authorizing with Backblaze B2:", error);
+    throw error;
+  }
+}
+
+/**
+ * Uploads a video file stream and/or a thumbnail file stream to Backblaze B2
+ * using @gideo-llc/backblaze-b2-upload-any extension
+ * and generates pre-signed URLs for private access.
+ *
+ * @param {import('stream').Readable} [videoStream] - Optional readable stream of the video file.
+ * @param {number} [videoSize] - Optional size of the video file in bytes.
+ * @param {string} [videoFileNameInB2] - Optional desired file name for the video in B2.
+ * @param {string} [videoMimeType] - Optional MIME type of the video file.
+ * @param {import('stream').Readable} [thumbnailStream] - Optional readable stream of the thumbnail file.
+ * @param {number} [thumbnailSize] - Optional size of the thumbnail file in bytes.
+ * @param {string} [thumbnailFileNameInB2] - Optional desired file name for the thumbnail in B2.
+ * @param {string} [thumbnailMimeType] - Optional MIME type of the thumbnail file.
+ * @param {number} [durationSeconds=0] - Duration of the video in seconds (if video is uploaded).
+ * @param {number} [presignedUrlDurationSecs=parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 25200] - Duration for pre-signed URLs.
+ * @returns {Promise<object>} - An object containing B2 file info and pre-signed URLs.
+ *                             Format: { video: videoUploadResult|null, thumbnail: thumbnailUploadResult|null, message: string }
+ */
+async function uploadToB2AndGetPresignedUrl(
+  videoStream,
+  videoSize,
+  videoFileNameInB2,
+  videoMimeType,
+  thumbnailStream,
+  thumbnailSize,
+  thumbnailFileNameInB2,
+  thumbnailMimeType,
+  durationSeconds = 0,
+  presignedUrlDurationSecs = parseInt(
+    process.env.B2_PRESIGNED_URL_DURATION_SECONDS
+  ) || 25200 // Default to 7 hours for general files
+) {
+  try {
+    const authData = await authorizeB2();
+    const accountDownloadUrl = authData.downloadUrl;
+
+    let videoUploadResult = null;
+    let thumbnailUploadResult = null;
+
+    // Check if at least one file type is provided for upload
+    const hasVideoToUpload = videoStream && videoFileNameInB2 && videoMimeType;
+    const hasThumbnailToUpload =
+      thumbnailStream &&
+      thumbnailFileNameInB2 &&
+      thumbnailMimeType &&
+      thumbnailSize > 0;
+
+    if (!hasVideoToUpload && !hasThumbnailToUpload) {
+      throw new Error("No video or thumbnail data provided for upload.");
+    }
+
+    // --- Upload Video (if provided) ---
+    if (hasVideoToUpload) {
+      console.log(
+        `Uploading video stream ${videoFileNameInB2} using uploadAny...`
+      );
+      const uploadedVideoResponse = await b2.uploadAny({
+        bucketId: BUCKET_ID,
+        fileName: videoFileNameInB2,
+        data: videoStream,
+        contentType: videoMimeType,
+      });
+      const videoB2FileId =
+        uploadedVideoResponse.fileId || uploadedVideoResponse.data?.fileId;
+      const videoB2FileName =
+        uploadedVideoResponse.fileName || uploadedVideoResponse.data?.fileName;
+
+      if (!videoB2FileId || !videoB2FileName) {
+        console.error(
+          "uploadAny video response missing fileId or fileName:",
+          uploadedVideoResponse
+        );
+        throw new Error(
+          "Failed to get fileId or fileName from B2 uploadAny video response."
+        );
+      }
+      console.log(
+        `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2 via uploadAny.`
+      );
+
+      const { data: videoDownloadAuth } = await b2.getDownloadAuthorization({
+        bucketId: BUCKET_ID,
+        fileNamePrefix: videoB2FileName,
+        validDurationInSeconds: presignedUrlDurationSecs,
+      });
+      const videoViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${videoB2FileName}?Authorization=${videoDownloadAuth.authorizationToken}`;
+      const videoUrlExpiresAt = new Date(
+        Date.now() + presignedUrlDurationSecs * 1000
+      );
+      videoUploadResult = {
+        b2FileId: videoB2FileId,
+        b2FileName: videoB2FileName,
+        url: videoViewableUrl,
+        urlExpiresAt: videoUrlExpiresAt,
+        mimeType: videoMimeType,
+        durationSeconds: durationSeconds,
+      };
+    }
+
+    // --- Upload Thumbnail (if provided) ---
+    if (hasThumbnailToUpload) {
+      // Use a different presigned URL duration for images if specified, otherwise fallback to general duration
+      const imagePresignedUrlDurationSecs =
+        parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+        presignedUrlDurationSecs;
+      console.log(
+        `Uploading thumbnail stream ${thumbnailFileNameInB2} using uploadAny...`
+      );
+      const uploadedThumbResponse = await b2.uploadAny({
+        bucketId: BUCKET_ID,
+        fileName: thumbnailFileNameInB2,
+        data: thumbnailStream,
+        contentType: thumbnailMimeType,
+      });
+      const thumbnailB2FileId =
+        uploadedThumbResponse.fileId || uploadedThumbResponse.data?.fileId;
+      const thumbnailB2FileName =
+        uploadedThumbResponse.fileName || uploadedThumbResponse.data?.fileName;
+
+      if (!thumbnailB2FileId || !thumbnailB2FileName) {
+        console.error(
+          "uploadAny thumbnail response missing fileId or fileName:",
+          uploadedThumbResponse
+        );
+        throw new Error(
+          "Failed to get fileId or fileName from B2 uploadAny thumbnail response."
+        );
+      }
+      console.log(
+        `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2 via uploadAny.`
+      );
+
+      const { data: thumbDownloadAuth } = await b2.getDownloadAuthorization({
+        bucketId: BUCKET_ID,
+        fileNamePrefix: thumbnailB2FileName,
+        validDurationInSeconds: imagePresignedUrlDurationSecs, // Use image specific duration
+      });
+      const thumbnailViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${thumbnailB2FileName}?Authorization=${thumbDownloadAuth.authorizationToken}`;
+      const thumbnailUrlExpiresAt = new Date(
+        Date.now() + imagePresignedUrlDurationSecs * 1000
+      );
+      thumbnailUploadResult = {
+        b2FileId: thumbnailB2FileId,
+        b2FileName: thumbnailB2FileName,
+        url: thumbnailViewableUrl,
+        urlExpiresAt: thumbnailUrlExpiresAt,
+        mimeType: thumbnailMimeType,
+      };
+    }
+
+    let message = "Upload process completed.";
+    if (videoUploadResult && thumbnailUploadResult) {
+      message =
+        "Video and thumbnail uploaded successfully and pre-signed URLs generated.";
+    } else if (videoUploadResult) {
+      message = "Video uploaded successfully and pre-signed URL generated.";
+    } else if (thumbnailUploadResult) {
+      message = "Thumbnail uploaded successfully and pre-signed URL generated.";
+    }
+
+    return {
+      video: videoUploadResult,
+      thumbnail: thumbnailUploadResult,
+      message: message,
+    };
+  } catch (error) {
+    console.error(
+      `Error in B2 service (video: ${videoFileNameInB2 || "N/A"}, thumb: ${
+        thumbnailFileNameInB2 || "N/A"
+      }):`,
+      error.message
+    );
+    if (error.isAxiosError && error.response && error.response.data) {
+      console.error("B2 API Error Details:", error.response.data);
+    }
+    let errorToThrow = new Error(`B2 service error: ${error.message}`);
+    // Preserve any file IDs that might have been uploaded before an error occurred for potential cleanup
+    // This part might need more sophisticated handling if one upload succeeds and the other fails.
+    // For now, this error throwing is generic.
+    throw errorToThrow;
+  }
+}
+
+/**
+ * Generates a new pre-signed URL for an existing private file in B2.
+ * @param {string} b2FileName - The name of the file in B2 (e.g., vods/streamkey-timestamp.flv).
+ * @param {number} [presignedUrlDuration=3600] - Duration in seconds for which the new URL is valid.
+ * @returns {Promise<string>} - The new pre-signed URL.
+ */
+async function generatePresignedUrlForExistingFile(
+  b2FileName,
+  presignedUrlDuration = 3600
+) {
+  try {
+    const authData = await authorizeB2();
+    const accountDownloadUrl = authData.downloadUrl;
+
+    const {
+      data: { authorizationToken: newDownloadAuthToken },
+    } = await b2.getDownloadAuthorization({
+      bucketId: BUCKET_ID,
+      fileNamePrefix: b2FileName,
+      validDurationInSeconds: presignedUrlDuration,
+    });
+
+    const newViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${newDownloadAuthToken}`;
+
+    console.log(
+      `Generated new pre-signed URL for ${b2FileName} (valid for ${presignedUrlDuration}s): ${newViewableUrl}`
+    );
+    return newViewableUrl;
+  } catch (error) {
+    console.error(
+      `Error generating new pre-signed URL for ${b2FileName}:`,
+      error.message
+    );
+    if (error.isAxiosError && error.response && error.response.data) {
+      console.error("B2 API Error Details:", error.response.data);
+    }
+    throw new Error(
+      `Failed to generate new pre-signed URL for ${b2FileName}: ${error.message}`
+    );
+  }
+}
+
+/**
+ * Deletes a file from Backblaze B2.
+ * @param {string} fileName - The name of the file in B2.
+ * @param {string} fileId - The ID of the file in B2.
+ * @returns {Promise<object>} - Confirmation from B2.
+ */
+async function deleteFileFromB2(fileName, fileId) {
+  try {
+    await authorizeB2(); // Ensure we are authorized
+
+    console.log(
+      `Attempting to delete file ${fileName} (ID: ${fileId}) from B2.`
+    );
+
+    const response = await b2.deleteFileVersion({
+      fileName: fileName,
+      fileId: fileId,
+    });
+
+    console.log(
+      `File ${fileName} (ID: ${fileId}) deleted successfully from B2.`
+    );
+    return response.data;
+  } catch (error) {
+    console.error(
+      `Error deleting file ${fileName} (ID: ${fileId}) from B2:`,
+      error.message
+    );
+    if (error.isAxiosError && error.response && error.response.data) {
+      console.error("B2 API Error Details for delete:", error.response.data);
+    }
+    // Decide if you want to throw an error that stops the VOD deletion process
+    // or just log it and proceed with DB deletion.
+    // For now, let's throw to indicate B2 deletion failure.
+    throw new Error(
+      `Failed to delete file ${fileName} from B2: ${error.message}`
+    );
+  }
+}
+
+// Export the main function to be used by other services
+export {
+  uploadToB2AndGetPresignedUrl,
+  authorizeB2,
+  generatePresignedUrlForExistingFile,
+  deleteFileFromB2,
 };
 ```
 
@@ -3923,6 +3849,462 @@ export const vodService = {
   deleteVOD,
   processRecordedFileToVOD,
   refreshVODUrl,
+};
+```
+
+## File: src/services/streamService.js
+```javascript
+import { v4 as uuidv4 } from "uuid";
+import { Stream, User } from "../models/index.js";
+import { Op } from "sequelize"; // For more complex queries if needed later
+import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Added for error handling
+import {
+  uploadToB2AndGetPresignedUrl,
+  deleteFileFromB2,
+} from "../lib/b2.service.js"; // Added for B2 upload
+import fs from "fs/promises"; // Added for file system operations
+import fsSync from "fs"; // Added for sync file system operations (createReadStream)
+import path from "path"; // Added for path manipulation
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const logger = {
+  // Basic logger
+  info: console.log,
+  error: console.error,
+};
+
+/**
+ * Tạo mới một stream, có thể kèm thumbnail upload.
+ * @param {object} data - Dữ liệu stream.
+ * @param {number} data.userId - ID của người dùng.
+ * @param {string} data.title - Tiêu đề stream.
+ * @param {string} [data.description] - Mô tả stream.
+ * @param {string} [data.thumbnailFilePath] - Đường dẫn file thumbnail tạm (nếu có).
+ * @param {string} [data.originalThumbnailFileName] - Tên file thumbnail gốc (nếu có).
+ * @param {string} [data.thumbnailMimeType] - Mime type của thumbnail (nếu có).
+ * @returns {Promise<Stream>} Đối tượng Stream đã tạo.
+ */
+export const createStreamWithThumbnailService = async ({
+  userId,
+  title,
+  description,
+  thumbnailFilePath,
+  originalThumbnailFileName,
+  thumbnailMimeType,
+}) => {
+  let b2ThumbFileIdToDelete = null;
+  let b2ThumbFileNameToDelete = null;
+
+  try {
+    logger.info(
+      `Service: Bắt đầu tạo stream cho user: ${userId} với title: ${title}`
+    );
+
+    const streamKey = uuidv4();
+    let thumbnailB2Response = null;
+
+    if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
+      logger.info(`Service: Có thumbnail được cung cấp: ${thumbnailFilePath}`);
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      const thumbnailSize = thumbStats.size;
+
+      if (thumbnailSize > 0) {
+        const thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+        const safeOriginalThumbnailFileName = originalThumbnailFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const thumbnailFileNameInB2 = `users/${userId}/stream_thumbnails/${Date.now()}_${safeOriginalThumbnailFileName}`;
+
+        // Sử dụng một phiên bản đơn giản hơn của uploadToB2AndGetPresignedUrl
+        // Hoặc cập nhật b2.service.js để có một hàm chỉ upload thumbnail
+        // Hiện tại, giả sử uploadToB2AndGetPresignedUrl có thể xử lý khi chỉ có thumbnail
+        // bằng cách truyền null/undefined cho các tham số video.
+        // Cần kiểm tra lại hàm uploadToB2AndGetPresignedUrl trong b2.service.js
+        // For simplicity, let's assume a dedicated function or a flexible one exists:
+        // This is a simplified conceptual call.
+        // You'll need to ensure `uploadToB2AndGetPresignedUrl` or a similar function
+        // in `b2.service.js` can handle uploading just a thumbnail.
+        // It might be better to have a specific `uploadThumbnailToB2` function.
+
+        const tempB2Response = await uploadToB2AndGetPresignedUrl(
+          null, // videoStream
+          0, // videoSize
+          null, // videoFileNameInB2
+          null, // videoMimeType
+          thumbnailStream,
+          thumbnailSize,
+          thumbnailFileNameInB2,
+          thumbnailMimeType,
+          null, // durationSeconds (not applicable for stream thumbnail itself)
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+            3600 * 24 * 30 // e.g., 30 days for image URLs
+        );
+        thumbnailB2Response = tempB2Response.thumbnail; // Assuming the response structure has a thumbnail key
+
+        if (!thumbnailB2Response || !thumbnailB2Response.url) {
+          logger.error(
+            "Service: Lỗi upload thumbnail lên B2, không có response hoặc URL."
+          );
+          throw new AppError("Không thể upload thumbnail lên B2.", 500);
+        }
+
+        b2ThumbFileIdToDelete = thumbnailB2Response.b2FileId;
+        b2ThumbFileNameToDelete = thumbnailB2Response.b2FileName;
+        logger.info(
+          `Service: Upload thumbnail lên B2 thành công: ${thumbnailB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn(
+          "Service: File thumbnail được cung cấp nhưng kích thước là 0."
+        );
+      }
+    }
+
+    const streamData = {
+      userId,
+      streamKey,
+      title,
+      description: description || "",
+      status: "ended", // Default status
+      thumbnailUrl: thumbnailB2Response?.url || null,
+      thumbnailUrlExpiresAt: thumbnailB2Response?.urlExpiresAt || null,
+      b2ThumbnailFileId: thumbnailB2Response?.b2FileId || null,
+      b2ThumbnailFileName: thumbnailB2Response?.b2FileName || null,
+    };
+
+    const newStream = await Stream.create(streamData);
+    logger.info(`Service: Stream đã được tạo trong DB với ID: ${newStream.id}`);
+    return newStream;
+  } catch (error) {
+    logger.error("Service: Lỗi trong createStreamWithThumbnailService:", error);
+    if (b2ThumbFileIdToDelete && b2ThumbFileNameToDelete) {
+      try {
+        logger.warn(
+          `Service: Dọn dẹp thumbnail ${b2ThumbFileNameToDelete} trên B2 do lỗi khi tạo stream.`
+        );
+        await deleteFileFromB2(b2ThumbFileNameToDelete, b2ThumbFileIdToDelete);
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail ${b2ThumbFileNameToDelete} trên B2:`,
+          deleteB2Error
+        );
+      }
+    }
+    // Ném lại lỗi để controller xử lý
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Không thể tạo stream: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+
+/**
+ * Cập nhật thông tin stream, bao gồm cả thumbnail.
+ * @param {number} streamId - ID của stream cần cập nhật.
+ * @param {number} currentUserId - ID của người dùng hiện tại thực hiện yêu cầu.
+ * @param {object} updateData - Dữ liệu cần cập nhật.
+ * @param {string} [updateData.title] - Tiêu đề mới.
+ * @param {string} [updateData.description] - Mô tả mới.
+ * @param {string} [updateData.status] - Trạng thái mới ('live', 'ended').
+ * @param {string} [updateData.thumbnailFilePath] - Đường dẫn file thumbnail tạm mới (nếu có).
+ * @param {string} [updateData.originalThumbnailFileName] - Tên file thumbnail gốc mới (nếu có).
+ * @param {string} [updateData.thumbnailMimeType] - Mime type của thumbnail mới (nếu có).
+ * @returns {Promise<Stream>} Thông tin stream đã cập nhật.
+ * @throws {AppError} Nếu có lỗi xảy ra.
+ */
+export const updateStreamInfoService = async (
+  streamId,
+  currentUserId,
+  updateData
+) => {
+  let newB2ThumbFileIdToDeleteOnError = null;
+  let newB2ThumbFileNameToDeleteOnError = null;
+
+  try {
+    const stream = await Stream.findByPk(streamId);
+
+    if (!stream) {
+      throw new AppError("Stream not found", 404);
+    }
+
+    if (stream.userId !== currentUserId) {
+      throw new AppError("User not authorized to update this stream", 403);
+    }
+
+    const {
+      title,
+      description,
+      status,
+      thumbnailFilePath,
+      originalThumbnailFileName,
+      thumbnailMimeType,
+    } = updateData;
+
+    // Lưu lại thông tin thumbnail cũ để xóa nếu upload thumbnail mới thành công
+    const oldB2ThumbnailFileId = stream.b2ThumbnailFileId;
+    const oldB2ThumbnailFileName = stream.b2ThumbnailFileName;
+    let newThumbnailB2Response = null;
+
+    if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
+      logger.info(
+        `Service: Có thumbnail mới được cung cấp cho stream ${streamId}: ${thumbnailFilePath}`
+      );
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      const thumbnailSize = thumbStats.size;
+
+      if (thumbnailSize > 0) {
+        const thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+        const safeOriginalThumbnailFileName = originalThumbnailFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const thumbnailFileNameInB2 = `users/${
+          stream.userId
+        }/stream_thumbnails/${Date.now()}_${safeOriginalThumbnailFileName}`;
+
+        const tempB2Response = await uploadToB2AndGetPresignedUrl(
+          null, // videoStream
+          0, // videoSize
+          null, // videoFileNameInB2
+          null, // videoMimeType
+          thumbnailStream,
+          thumbnailSize,
+          thumbnailFileNameInB2,
+          thumbnailMimeType,
+          null, // durationSeconds
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+            3600 * 24 * 7 // 7 days for image URLs
+        );
+        newThumbnailB2Response = tempB2Response.thumbnail;
+
+        if (!newThumbnailB2Response || !newThumbnailB2Response.url) {
+          logger.error(
+            "Service: Lỗi upload thumbnail mới lên B2, không có response hoặc URL."
+          );
+          throw new AppError("Không thể upload thumbnail mới lên B2.", 500);
+        }
+
+        newB2ThumbFileIdToDeleteOnError = newThumbnailB2Response.b2FileId;
+        newB2ThumbFileNameToDeleteOnError = newThumbnailB2Response.b2FileName;
+
+        // Cập nhật thông tin thumbnail mới vào stream object
+        stream.thumbnailUrl = newThumbnailB2Response.url;
+        stream.thumbnailUrlExpiresAt = newThumbnailB2Response.urlExpiresAt;
+        stream.b2ThumbnailFileId = newThumbnailB2Response.b2FileId;
+        stream.b2ThumbnailFileName = newThumbnailB2Response.b2FileName;
+
+        logger.info(
+          `Service: Upload thumbnail mới lên B2 thành công: ${newThumbnailB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn(
+          "Service: File thumbnail mới được cung cấp nhưng kích thước là 0."
+        );
+      }
+    }
+
+    // Cập nhật các trường thông tin khác
+    if (title !== undefined) stream.title = title;
+    if (description !== undefined) stream.description = description;
+
+    if (status !== undefined && ["live", "ended"].includes(status)) {
+      // Logic cập nhật status, startTime, endTime tương tự như trước
+      // (đã có trong file của bạn, có thể copy/paste hoặc giữ nguyên nếu nó đúng)
+      const oldStatus = stream.status;
+      if (stream.status !== status) {
+        stream.status = status;
+        if (status === "live") {
+          if (oldStatus === "ended" || !stream.startTime) {
+            stream.startTime = new Date();
+            stream.endTime = null;
+          }
+        } else if (status === "ended") {
+          if (oldStatus === "live" && !stream.endTime) {
+            stream.endTime = new Date();
+          }
+        }
+      }
+    } else if (status !== undefined) {
+      throw new AppError(
+        "Invalid status value. Must be 'live' or 'ended'.",
+        400
+      );
+    }
+
+    await stream.save();
+    logger.info(`Service: Stream ${streamId} đã được cập nhật thành công.`);
+
+    // Nếu upload thumbnail mới thành công và có thumbnail cũ, thì xóa thumbnail cũ trên B2
+    if (
+      newThumbnailB2Response &&
+      oldB2ThumbnailFileId &&
+      oldB2ThumbnailFileName
+    ) {
+      try {
+        logger.info(
+          `Service: Xóa thumbnail cũ ${oldB2ThumbnailFileName} (ID: ${oldB2ThumbnailFileId}) trên B2.`
+        );
+        await deleteFileFromB2(oldB2ThumbnailFileName, oldB2ThumbnailFileId);
+        logger.info(
+          `Service: Đã xóa thumbnail cũ ${oldB2ThumbnailFileName} khỏi B2.`
+        );
+      } catch (deleteError) {
+        logger.error(
+          `Service: Lỗi khi xóa thumbnail cũ ${oldB2ThumbnailFileName} trên B2: ${deleteError.message}`
+        );
+        // Không ném lỗi ở đây để không ảnh hưởng đến việc stream đã được cập nhật thành công
+        // Nhưng cần log lại để theo dõi
+      }
+    }
+
+    return stream;
+  } catch (error) {
+    logger.error(
+      `Service: Lỗi trong updateStreamInfoService cho stream ${streamId}:`,
+      error
+    );
+    // Nếu upload thumbnail mới gặp lỗi, và đã upload lên B2, thì cần xóa nó đi
+    if (newB2ThumbFileIdToDeleteOnError && newB2ThumbFileNameToDeleteOnError) {
+      try {
+        logger.warn(
+          `Service: Dọn dẹp thumbnail MỚI ${newB2ThumbFileNameToDeleteOnError} trên B2 do lỗi khi cập nhật stream.`
+        );
+        await deleteFileFromB2(
+          newB2ThumbFileNameToDeleteOnError,
+          newB2ThumbFileIdToDeleteOnError
+        );
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail MỚI ${newB2ThumbFileNameToDeleteOnError} trên B2: ${deleteB2Error}`
+        );
+      }
+    }
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Không thể cập nhật stream: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+
+/**
+ * Lấy danh sách các stream.
+ * @param {object} queryParams - Tham số query (status, page, limit).
+ * @returns {Promise<object>} Danh sách stream và thông tin phân trang.
+ * @throws {Error} Nếu có lỗi xảy ra.
+ */
+export const getStreamsListService = async (queryParams) => {
+  try {
+    const { status, page = 1, limit = 10 } = queryParams;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const whereClause = {};
+    if (status && ["live", "ended"].includes(status)) {
+      whereClause.status = status;
+    }
+
+    const { count, rows } = await Stream.findAndCountAll({
+      where: whereClause,
+      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+      order: [["createdAt", "DESC"]],
+      limit: parseInt(limit, 10),
+      offset: offset,
+      distinct: true, // Important for count when using include with hasMany
+    });
+
+    return {
+      totalStreams: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+      streams: rows,
+    };
+  } catch (error) {
+    console.error("Error in getStreamsListService:", error);
+    throw new Error("Failed to fetch streams: " + error.message);
+  }
+};
+
+/**
+ * Lấy chi tiết một stream.
+ * @param {number} streamId - ID của stream.
+ * @returns {Promise<object|null>} Thông tin stream hoặc null nếu không tìm thấy.
+ * @throws {Error} Nếu có lỗi xảy ra.
+ */
+export const getStreamDetailsService = async (streamId) => {
+  try {
+    const stream = await Stream.findByPk(streamId, {
+      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+    });
+    return stream; // Returns null if not found, controller will handle 404
+  } catch (error) {
+    console.error("Error in getStreamDetailsService:", error);
+    throw new Error("Failed to fetch stream details: " + error.message);
+  }
+};
+
+/**
+ * Đánh dấu stream là live.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<void>}
+ * @throws {Error} Nếu có lỗi xảy ra.
+ */
+export const markLive = async (streamKey) => {
+  try {
+    const [updatedRows] = await Stream.update(
+      { status: "live", startTime: new Date(), endTime: null }, // endTime: null để reset nếu stream đã kết thúc trước đó
+      { where: { streamKey } }
+    );
+    if (updatedRows === 0) {
+      console.warn(
+        `markLive: Stream with key ${streamKey} not found or no change needed.`
+      );
+      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
+      // throw new Error(`Stream with key ${streamKey} not found.`);
+    }
+    console.log(`Stream ${streamKey} marked as live.`);
+  } catch (error) {
+    console.error(`Error in markLive for stream ${streamKey}:`, error);
+    throw new Error("Failed to mark stream as live: " + error.message);
+  }
+};
+
+/**
+ * Đánh dấu stream là đã kết thúc.
+ * @param {string} streamKey - Khóa của stream.
+ * @param {number} [viewerCount] - Số lượng người xem (nếu có).
+ * @returns {Promise<void>}
+ * @throws {Error} Nếu có lỗi xảy ra.
+ */
+export const markEnded = async (streamKey, viewerCount) => {
+  try {
+    const updatePayload = {
+      status: "ended",
+      endTime: new Date(),
+    };
+    if (viewerCount !== undefined && !isNaN(parseInt(viewerCount))) {
+      updatePayload.viewerCount = parseInt(viewerCount);
+    }
+
+    const [updatedRows] = await Stream.update(updatePayload, {
+      where: { streamKey },
+    });
+
+    if (updatedRows === 0) {
+      console.warn(
+        `markEnded: Stream with key ${streamKey} not found or no change needed.`
+      );
+      // Can throw an error if stream not existing is an edge case
+      // throw new Error(`Stream with key ${streamKey} not found.`);
+    }
+    console.log(`Stream ${streamKey} marked as ended.`);
+  } catch (error) {
+    console.error(`Error in markEnded for stream ${streamKey}:`, error);
+    throw new Error("Failed to mark stream as ended: " + error.message);
+  }
 };
 ```
 

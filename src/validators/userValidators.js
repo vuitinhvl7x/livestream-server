@@ -43,3 +43,22 @@ export const validateUserPayload = [
       "Password must be at least 6 characters long for registration. For login, only non-empty is checked if you use a simpler rule."
     ),
 ];
+
+export const validateUserProfileUpdate = [
+  body("displayName")
+    .optional()
+    .isString()
+    .withMessage("Display name must be a string")
+    .isLength({ min: 1, max: 50 })
+    .withMessage("Display name must be between 1 and 50 characters"),
+  body("avatarUrl")
+    .optional()
+    .isURL()
+    .withMessage("Avatar URL must be a valid URL"),
+  body("bio")
+    .optional()
+    .isString()
+    .withMessage("Bio must be a string")
+    .isLength({ max: 500 })
+    .withMessage("Bio can be at most 500 characters long"),
+];
