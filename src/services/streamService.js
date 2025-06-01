@@ -5,6 +5,7 @@ import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Adde
 import {
   uploadToB2AndGetPresignedUrl,
   deleteFileFromB2,
+  generatePresignedUrlForExistingFile,
 } from "../lib/b2.service.js"; // Added for B2 upload
 import fs from "fs/promises"; // Added for file system operations
 import fsSync from "fs"; // Added for sync file system operations (createReadStream)
@@ -383,6 +384,57 @@ export const getStreamDetailsService = async (streamId) => {
     const stream = await Stream.findByPk(streamId, {
       include: [{ model: User, as: "user", attributes: ["id", "username"] }],
     });
+
+    if (!stream) {
+      return null; // Controller will handle 404
+    }
+
+    // Logic to refresh thumbnailUrl if expired or nearing expiry
+    const presignedUrlDurationImages =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+      3600 * 24 * 7; // 7 days default for images
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+
+    if (
+      stream.thumbnailUrl &&
+      stream.b2ThumbnailFileName &&
+      (!stream.thumbnailUrlExpiresAt ||
+        new Date(stream.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        logger.info(
+          `Service: Pre-signed URL for stream thumbnail ${streamId} (file: ${stream.b2ThumbnailFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newThumbnailUrl = await generatePresignedUrlForExistingFile(
+          stream.b2ThumbnailFileName,
+          presignedUrlDurationImages
+        );
+        stream.thumbnailUrl = newThumbnailUrl;
+        stream.thumbnailUrlExpiresAt = new Date(
+          Date.now() + presignedUrlDurationImages * 1000
+        );
+        await stream.save();
+        logger.info(
+          `Service: Refreshed pre-signed URL for stream thumbnail ${streamId}. New expiry: ${stream.thumbnailUrlExpiresAt}`
+        );
+      } catch (refreshError) {
+        logger.error(
+          `Service: Failed to refresh stream thumbnail URL for stream ${streamId} (file: ${stream.b2ThumbnailFileName}): ${refreshError.message}`
+        );
+        // Continue with potentially stale URL, or handle error differently
+      }
+    } else if (
+      stream.thumbnailUrl &&
+      !stream.b2ThumbnailFileName &&
+      (!stream.thumbnailUrlExpiresAt ||
+        new Date(stream.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `Service: Stream thumbnail URL for stream ${streamId} needs refresh, but b2ThumbnailFileName is missing.`
+      );
+    }
+
     return stream; // Returns null if not found, controller will handle 404
   } catch (error) {
     console.error("Error in getStreamDetailsService:", error);

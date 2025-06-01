@@ -4,6 +4,7 @@ import { User } from "../models/index.js";
 import {
   uploadToB2AndGetPresignedUrl,
   deleteFileFromB2,
+  generatePresignedUrlForExistingFile,
 } from "../lib/b2.service.js";
 import fs from "fs/promises";
 import fsSync from "fs";
@@ -241,6 +242,53 @@ export const getUserProfileById = async (userId) => {
     if (!user) {
       throw new AppError("User not found", 404);
     }
+
+    // Logic to refresh avatarUrl if expired or nearing expiry
+    const presignedUrlDurationImages =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+      3600 * 24 * 7; // 7 days default for images
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+
+    if (
+      user.avatarUrl &&
+      user.b2AvatarFileName &&
+      (!user.avatarUrlExpiresAt ||
+        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        logger.info(
+          `Service: Pre-signed URL for avatar of user ${userId} (file: ${user.b2AvatarFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newAvatarUrl = await generatePresignedUrlForExistingFile(
+          user.b2AvatarFileName,
+          presignedUrlDurationImages
+        );
+        user.avatarUrl = newAvatarUrl;
+        user.avatarUrlExpiresAt = new Date(
+          Date.now() + presignedUrlDurationImages * 1000
+        );
+        await user.save();
+        logger.info(
+          `Service: Refreshed pre-signed URL for avatar of user ${userId}. New expiry: ${user.avatarUrlExpiresAt}`
+        );
+      } catch (refreshError) {
+        logger.error(
+          `Service: Failed to refresh avatar URL for user ${userId} (file: ${user.b2AvatarFileName}): ${refreshError.message}`
+        );
+        // Continue with potentially stale URL, or handle error differently
+      }
+    } else if (
+      user.avatarUrl &&
+      !user.b2AvatarFileName &&
+      (!user.avatarUrlExpiresAt ||
+        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `Service: Avatar URL for user ${userId} needs refresh, but b2AvatarFileName is missing.`
+      );
+    }
+
     return user;
   } catch (error) {
     logger.error(

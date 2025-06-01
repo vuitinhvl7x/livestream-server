@@ -575,10 +575,12 @@ const getVODById = async (vodId) => {
     const now = new Date();
     const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
 
+    let urlsRefreshed = false;
+
     if (!vod.urlExpiresAt || new Date(vod.urlExpiresAt) < oneHourFromNow) {
       if (vod.b2FileName) {
         logger.info(
-          `Pre-signed URL for VOD ${vodId} (file: ${vod.b2FileName}) is expired or expiring soon. Refreshing...`
+          `Pre-signed URL for VOD Video ${vodId} (file: ${vod.b2FileName}) is expired or expiring soon. Refreshing...`
         );
         const newViewableUrl = await generatePresignedUrlForExistingFile(
           vod.b2FileName,
@@ -586,24 +588,64 @@ const getVODById = async (vodId) => {
         );
         vod.videoUrl = newViewableUrl;
         vod.urlExpiresAt = new Date(Date.now() + presignedUrlDuration * 1000);
-
-        // Làm mới cả thumbnail nếu có
-        if (vod.thumbnail && vod.thumbnail.includes("?Authorization=")) {
-          // Giả sử thumbnail cũng là pre-signed
-          // Cần logic để lấy b2FileName của thumbnail, hiện tại chưa lưu riêng
-          // Tạm thời bỏ qua refresh thumbnail hoặc giả sử thumbnail có URL public/thời hạn dài hơn
-          // Nếu thumbnail cũng từ B2 và private, bạn cần lưu b2FileName của thumbnail riêng.
-        }
-
-        await vod.save();
+        urlsRefreshed = true;
         logger.info(
-          `Refreshed pre-signed URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
+          `Refreshed pre-signed Video URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
         );
       } else {
         logger.warn(
-          `VOD ${vodId} needs URL refresh but b2FileName is missing.`
+          `VOD Video ${vodId} needs URL refresh but b2FileName is missing.`
         );
       }
+    }
+
+    // Refresh Thumbnail URL if it exists, is a B2 presigned URL, and is expiring
+    if (
+      vod.thumbnailUrl &&
+      vod.b2ThumbnailFileName &&
+      (!vod.thumbnailUrlExpiresAt ||
+        new Date(vod.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        // Use B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES for thumbnail refresh duration if available
+        const imagePresignedUrlDuration =
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+          presignedUrlDuration;
+        logger.info(
+          `Pre-signed URL for VOD Thumbnail ${vodId} (file: ${vod.b2ThumbnailFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newThumbnailUrl = await generatePresignedUrlForExistingFile(
+          vod.b2ThumbnailFileName,
+          imagePresignedUrlDuration
+        );
+        vod.thumbnailUrl = newThumbnailUrl;
+        vod.thumbnailUrlExpiresAt = new Date(
+          Date.now() + imagePresignedUrlDuration * 1000
+        );
+        urlsRefreshed = true;
+        logger.info(
+          `Refreshed pre-signed Thumbnail URL for VOD ${vodId}. New expiry: ${vod.thumbnailUrlExpiresAt}`
+        );
+      } catch (thumbRefreshError) {
+        logger.error(
+          `Failed to refresh VOD Thumbnail URL for ${vodId} (file: ${vod.b2ThumbnailFileName}): ${thumbRefreshError.message}`
+        );
+        // Decide if to proceed with stale URL or throw error
+      }
+    } else if (
+      vod.thumbnailUrl &&
+      !vod.b2ThumbnailFileName &&
+      (!vod.thumbnailUrlExpiresAt ||
+        new Date(vod.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `VOD Thumbnail ${vodId} needs URL refresh but b2ThumbnailFileName is missing.`
+      );
+    }
+
+    if (urlsRefreshed) {
+      await vod.save();
+      logger.info(`VOD ${vodId} saved with refreshed URLs.`);
     }
 
     return vod;
