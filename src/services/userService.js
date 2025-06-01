@@ -221,3 +221,36 @@ export const updateUserProfile = async (
     );
   }
 };
+
+export const getUserProfileById = async (userId) => {
+  try {
+    const user = await User.findByPk(userId, {
+      attributes: [
+        "id",
+        "username",
+        "displayName",
+        "avatarUrl",
+        "avatarUrlExpiresAt",
+        "b2AvatarFileId",
+        "b2AvatarFileName",
+        "bio",
+        "createdAt",
+        "updatedAt",
+      ],
+    });
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+    return user;
+  } catch (error) {
+    logger.error(
+      `Service: Error in getUserProfileById for user ${userId}:`,
+      error
+    );
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not retrieve user profile: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};

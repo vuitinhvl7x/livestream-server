@@ -3,6 +3,7 @@ import {
   registerUser,
   loginUser,
   updateUserProfile,
+  getUserProfileById,
 } from "../services/userService.js";
 
 export const register = async (req, res) => {
@@ -95,5 +96,19 @@ export const updateProfile = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const getMyProfile = async (req, res) => {
+  try {
+    const userId = req.user.id; // Lấy userId từ token đã được xác thực
+    const userProfile = await getUserProfileById(userId);
+
+    // userProfile đã được service lọc các trường cần thiết
+    res.status(200).json(userProfile);
+  } catch (error) {
+    // Nếu service ném AppError, nó sẽ có statusCode
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
   }
 };
