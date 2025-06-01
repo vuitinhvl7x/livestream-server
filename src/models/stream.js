@@ -48,7 +48,19 @@ const Stream = sequelize.define(
       defaultValue: 0,
       allowNull: false,
     },
-    thumbnail: {
+    thumbnailUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    thumbnailUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    b2ThumbnailFileId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    b2ThumbnailFileName: {
       type: DataTypes.STRING,
       allowNull: true,
     },

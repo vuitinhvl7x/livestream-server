@@ -1,58 +1,106 @@
 import {
-  createStreamService,
+  createStreamWithThumbnailService,
   updateStreamInfoService,
   getStreamsListService,
   getStreamDetailsService,
 } from "../services/streamService.js";
-import { validationResult } from "express-validator";
+import { validationResult, matchedData } from "express-validator";
 import { v4 as uuidv4 } from "uuid";
-import { Stream, User } from "../models/index.js"; 
+import { Stream, User } from "../models/index.js";
+import { AppError } from "../utils/errorHandler.js";
+import fs from "fs/promises";
+import path from "path";
 
-// Endpoint Tạo Mới Stream
-export const createStream = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+// Endpoint Tạo Mới Stream (with thumbnail upload)
+export const createStream = async (req, res, next) => {
+  let thumbnailFilePathTemp = null;
 
   try {
-    const { title, description } = req.body;
-    // userId sẽ được lấy từ req.user (do middleware authenticateToken gán vào)
-    const userId = req.user.id;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) {
+        await fs.unlink(req.file.path);
+      }
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id;
 
     if (!userId) {
-      // This case should ideally be caught by authenticateToken middleware if it enforces auth
-      return res.status(401).json({
-        message: "User not authenticated. User ID missing from request.",
-      });
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
     }
 
-    const newStream = await createStreamService(userId, title, description);
+    const { title, description } = validatedData;
+    let thumbnailFile = null;
+
+    if (req.file && req.file.fieldname === "thumbnailFile") {
+      thumbnailFile = req.file;
+      thumbnailFilePathTemp = thumbnailFile.path;
+    }
+
+    const servicePayload = {
+      userId,
+      title,
+      description,
+      thumbnailFilePath: thumbnailFile?.path,
+      originalThumbnailFileName: thumbnailFile?.originalname,
+      thumbnailMimeType: thumbnailFile?.mimetype,
+    };
+
+    logger.info(
+      `Controller: Gọi createStreamWithThumbnailService với payload cho user: ${userId}`,
+      {
+        title: servicePayload.title,
+        hasThumbnail: !!servicePayload.thumbnailFilePath,
+      }
+    );
+
+    const newStream = await createStreamWithThumbnailService(servicePayload);
+
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
+        );
+        thumbnailFilePathTemp = null;
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp} sau khi service thành công: `,
+          unlinkError
+        );
+      }
+    }
 
     res.status(201).json({
+      success: true,
       message: "Stream created successfully",
-      stream: {
-        id: newStream.id,
-        userId: newStream.userId,
-        streamKey: newStream.streamKey,
-        title: newStream.title,
-        description: newStream.description,
-        status: newStream.status,
-        createdAt: newStream.createdAt,
-      },
+      data: newStream,
     });
   } catch (error) {
-    console.error("Error in createStream controller:", error);
-    // Specific error from service can be checked if needed
-    if (error.message.startsWith("Failed to create stream")) {
-      return res
-        .status(500)
-        .json({ message: "Error creating stream", error: error.message });
+    logger.error("Controller: Lỗi khi tạo stream:", error);
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (trong catch): ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (trong catch) ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
     }
-    res.status(500).json({
-      message: "An unexpected error occurred while creating the stream.",
-      error: error.message,
-    });
+    next(error);
   }
 };
 
@@ -135,18 +183,17 @@ export const getStreams = async (req, res) => {
         title: stream.title,
         description: stream.description,
         status: stream.status,
-        // streamKey is sensitive, decide if it should be here
-        // streamKey: stream.streamKey,
         startTime: stream.startTime,
         endTime: stream.endTime,
         viewerCount: stream.viewerCount,
-        thumbnail: stream.thumbnail,
-        user: stream.user, // user object from include
+        thumbnailUrl: stream.thumbnailUrl,
+        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
+        user: stream.user,
         createdAt: stream.createdAt,
       })),
     });
   } catch (error) {
-    console.error("Error in getStreams controller:", error);
+    logger.error("Error in getStreams controller:", error);
     res
       .status(500)
       .json({ message: "Error fetching streams", error: error.message });
@@ -154,18 +201,24 @@ export const getStreams = async (req, res) => {
 };
 
 // Endpoint Lấy Chi Tiết Một Stream
-export const getStreamById = async (req, res) => {
+export const getStreamById = async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    const firstError = errors.array({ onlyFirstError: true })[0];
+    return next(new AppError(`Validation failed: ${firstError.msg}`, 400));
   }
 
   try {
     const { streamId } = req.params;
-    const stream = await getStreamDetailsService(parseInt(streamId));
+    const id = parseInt(streamId);
+    if (isNaN(id)) {
+      return next(new AppError("Stream ID must be a number.", 400));
+    }
+
+    const stream = await getStreamDetailsService(id);
 
     if (!stream) {
-      return res.status(404).json({ message: "Stream not found" });
+      return next(new AppError("Stream not found", 404));
     }
 
     res.status(200).json({
@@ -178,15 +231,16 @@ export const getStreamById = async (req, res) => {
         startTime: stream.startTime,
         endTime: stream.endTime,
         viewerCount: stream.viewerCount,
-        thumbnail: stream.thumbnail,
-        user: stream.user, // user object from include
+        thumbnailUrl: stream.thumbnailUrl,
+        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
+        streamKey: stream.streamKey,
+        user: stream.user,
         createdAt: stream.createdAt,
+        updatedAt: stream.updatedAt,
       },
     });
   } catch (error) {
-    console.error("Error in getStreamById controller:", error);
-    res
-      .status(500)
-      .json({ message: "Error fetching stream details", error: error.message });
+    logger.error("Error in getStreamById controller:", error);
+    next(error);
   }
 };

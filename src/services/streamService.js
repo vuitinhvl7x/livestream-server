@@ -1,29 +1,148 @@
 import { v4 as uuidv4 } from "uuid";
 import { Stream, User } from "../models/index.js";
 import { Op } from "sequelize"; // For more complex queries if needed later
+import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Added for error handling
+import {
+  uploadToB2AndGetPresignedUrl,
+  deleteFileFromB2,
+} from "../lib/b2.service.js"; // Added for B2 upload
+import fs from "fs/promises"; // Added for file system operations
+import fsSync from "fs"; // Added for sync file system operations (createReadStream)
+import path from "path"; // Added for path manipulation
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const logger = {
+  // Basic logger
+  info: console.log,
+  error: console.error,
+};
 
 /**
- * Tạo mới một stream.
- * @param {number} userId - ID của người dùng tạo stream.
- * @param {string} title - Tiêu đề của stream.
- * @param {string} description - Mô tả của stream.
- * @returns {Promise<object>} Thông tin stream đã tạo.
- * @throws {Error} Nếu có lỗi xảy ra.
+ * Tạo mới một stream, có thể kèm thumbnail upload.
+ * @param {object} data - Dữ liệu stream.
+ * @param {number} data.userId - ID của người dùng.
+ * @param {string} data.title - Tiêu đề stream.
+ * @param {string} [data.description] - Mô tả stream.
+ * @param {string} [data.thumbnailFilePath] - Đường dẫn file thumbnail tạm (nếu có).
+ * @param {string} [data.originalThumbnailFileName] - Tên file thumbnail gốc (nếu có).
+ * @param {string} [data.thumbnailMimeType] - Mime type của thumbnail (nếu có).
+ * @returns {Promise<Stream>} Đối tượng Stream đã tạo.
  */
-export const createStreamService = async (userId, title, description) => {
+export const createStreamWithThumbnailService = async ({
+  userId,
+  title,
+  description,
+  thumbnailFilePath,
+  originalThumbnailFileName,
+  thumbnailMimeType,
+}) => {
+  let b2ThumbFileIdToDelete = null;
+  let b2ThumbFileNameToDelete = null;
+
   try {
+    logger.info(
+      `Service: Bắt đầu tạo stream cho user: ${userId} với title: ${title}`
+    );
+
     const streamKey = uuidv4();
-    const newStream = await Stream.create({
+    let thumbnailB2Response = null;
+
+    if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
+      logger.info(`Service: Có thumbnail được cung cấp: ${thumbnailFilePath}`);
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      const thumbnailSize = thumbStats.size;
+
+      if (thumbnailSize > 0) {
+        const thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+        const safeOriginalThumbnailFileName = originalThumbnailFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const thumbnailFileNameInB2 = `users/${userId}/stream_thumbnails/${Date.now()}_${safeOriginalThumbnailFileName}`;
+
+        // Sử dụng một phiên bản đơn giản hơn của uploadToB2AndGetPresignedUrl
+        // Hoặc cập nhật b2.service.js để có một hàm chỉ upload thumbnail
+        // Hiện tại, giả sử uploadToB2AndGetPresignedUrl có thể xử lý khi chỉ có thumbnail
+        // bằng cách truyền null/undefined cho các tham số video.
+        // Cần kiểm tra lại hàm uploadToB2AndGetPresignedUrl trong b2.service.js
+        // For simplicity, let's assume a dedicated function or a flexible one exists:
+        // This is a simplified conceptual call.
+        // You'll need to ensure `uploadToB2AndGetPresignedUrl` or a similar function
+        // in `b2.service.js` can handle uploading just a thumbnail.
+        // It might be better to have a specific `uploadThumbnailToB2` function.
+
+        const tempB2Response = await uploadToB2AndGetPresignedUrl(
+          null, // videoStream
+          0, // videoSize
+          null, // videoFileNameInB2
+          null, // videoMimeType
+          thumbnailStream,
+          thumbnailSize,
+          thumbnailFileNameInB2,
+          thumbnailMimeType,
+          null, // durationSeconds (not applicable for stream thumbnail itself)
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+            3600 * 24 * 30 // e.g., 30 days for image URLs
+        );
+        thumbnailB2Response = tempB2Response.thumbnail; // Assuming the response structure has a thumbnail key
+
+        if (!thumbnailB2Response || !thumbnailB2Response.url) {
+          logger.error(
+            "Service: Lỗi upload thumbnail lên B2, không có response hoặc URL."
+          );
+          throw new AppError("Không thể upload thumbnail lên B2.", 500);
+        }
+
+        b2ThumbFileIdToDelete = thumbnailB2Response.b2FileId;
+        b2ThumbFileNameToDelete = thumbnailB2Response.b2FileName;
+        logger.info(
+          `Service: Upload thumbnail lên B2 thành công: ${thumbnailB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn(
+          "Service: File thumbnail được cung cấp nhưng kích thước là 0."
+        );
+      }
+    }
+
+    const streamData = {
       userId,
       streamKey,
       title,
-      description,
-      status: "ended", // Mặc định là 'ended'
-    });
+      description: description || "",
+      status: "ended", // Default status
+      thumbnailUrl: thumbnailB2Response?.url || null,
+      thumbnailUrlExpiresAt: thumbnailB2Response?.urlExpiresAt || null,
+      b2ThumbnailFileId: thumbnailB2Response?.b2FileId || null,
+      b2ThumbnailFileName: thumbnailB2Response?.b2FileName || null,
+    };
+
+    const newStream = await Stream.create(streamData);
+    logger.info(`Service: Stream đã được tạo trong DB với ID: ${newStream.id}`);
     return newStream;
   } catch (error) {
-    console.error("Error in createStreamService:", error);
-    throw new Error("Failed to create stream: " + error.message);
+    logger.error("Service: Lỗi trong createStreamWithThumbnailService:", error);
+    if (b2ThumbFileIdToDelete && b2ThumbFileNameToDelete) {
+      try {
+        logger.warn(
+          `Service: Dọn dẹp thumbnail ${b2ThumbFileNameToDelete} trên B2 do lỗi khi tạo stream.`
+        );
+        await deleteFileFromB2(b2ThumbFileNameToDelete, b2ThumbFileIdToDelete);
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail ${b2ThumbFileNameToDelete} trên B2:`,
+          deleteB2Error
+        );
+      }
+    }
+    // Ném lại lỗi để controller xử lý
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Không thể tạo stream: ${error.message}`,
+      error.statusCode || 500
+    );
   }
 };
 
@@ -196,7 +315,7 @@ export const markEnded = async (streamKey, viewerCount) => {
       console.warn(
         `markEnded: Stream with key ${streamKey} not found or no change needed.`
       );
-      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
+      // Can throw an error if stream not existing is an edge case
       // throw new Error(`Stream with key ${streamKey} not found.`);
     }
     console.log(`Stream ${streamKey} marked as ended.`);

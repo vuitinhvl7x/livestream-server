@@ -6,6 +6,7 @@ import {
   getStreamById,
 } from "../controllers/streamController.js";
 import authenticateToken from "../middlewares/authMiddleware.js";
+import upload from "../middlewares/uploadMiddleware.js";
 import {
   validateCreateStream,
   validateUpdateStream,
@@ -61,9 +62,18 @@ const router = express.Router();
 
 // Define routes
 // POST /api/streams - Tạo mới stream
-router.post("/", authenticateToken, validateCreateStream, createStream);
+// Use upload.single('thumbnailFile') to handle a single file upload for the thumbnail
+// The field name in the form-data should be 'thumbnailFile'
+router.post(
+  "/",
+  authenticateToken,
+  upload.single("thumbnailFile"), // Handle thumbnail upload first
+  validateCreateStream, // Ensure validators can handle req.body with multipart/form-data
+  createStream
+);
 
 // PUT /api/streams/:streamId - Cập nhật stream
+// If you also want to allow thumbnail updates, this route would need similar upload middleware
 router.put("/:streamId", authenticateToken, validateUpdateStream, updateStream);
 
 // GET /api/streams - Lấy danh sách stream (không yêu cầu xác thực cho route này)

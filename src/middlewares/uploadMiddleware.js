@@ -37,7 +37,7 @@ const storage = multer.diskStorage({
 });
 
 // Hàm kiểm tra loại file (chỉ chấp nhận video và ảnh cho các field tương ứng)
-const videoFileFilter = (req, file, cb) => {
+const fileFilter = (req, file, cb) => {
   const allowedVideoMimeTypes = [
     "video/mp4",
     "video/mpeg",
@@ -76,7 +76,7 @@ const videoFileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage: storage,
-  fileFilter: videoFileFilter,
+  fileFilter: fileFilter,
   limits: {
     fileSize: 1024 * 1024 * 500, // Giới hạn kích thước file: 500MB
   },

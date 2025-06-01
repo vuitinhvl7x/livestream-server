@@ -38,7 +38,6 @@ The content is organized as follows:
 
 # Directory Structure
 ```
-migrations/20250518153005-create-users.js
 migrations/20250601000000-create-vods.js
 migrations/create-users.js
 models/index.js
@@ -52,7 +51,7 @@ src/controllers/webhookController.js
 src/index.js
 src/lib/b2.service.js
 src/middlewares/authMiddleware.js
-src/middlewares/validators/vodValidator.js
+src/middlewares/uploadMiddleware.js
 src/models/index.js
 src/models/mongo/ChatMessage.js
 src/models/stream.js
@@ -69,73 +68,13 @@ src/services/userService.js
 src/services/vodService.js
 src/socketHandlers.js
 src/utils/errorHandler.js
+src/utils/videoUtils.js
 src/validators/streamValidators.js
 src/validators/userValidators.js
+src/validators/vodValidator.js
 ```
 
 # Files
-
-## File: src/utils/errorHandler.js
-```javascript
-// src/utils/errorHandler.js
-
-// Lớp lỗi tùy chỉnh để có thể thêm statusCode và các thông tin khác
-class AppError extends Error {
-  constructor(message, statusCode) {
-    super(message);
-    this.statusCode = statusCode;
-    this.status = `${statusCode}`.startsWith("4") ? "fail" : "error";
-    this.isOperational = true; // Lỗi có thể dự đoán được, không phải bug của lập trình viên
-
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
-// Hàm helper để xử lý lỗi trong các service
-const handleServiceError = (error, contextMessage) => {
-  if (error instanceof AppError) {
-    // Nếu lỗi đã là AppError, chỉ cần log thêm context và re-throw
-    console.error(`AppError in ${contextMessage}:`, error.message);
-    throw error;
-  }
-
-  // Nếu là lỗi khác (ví dụ: lỗi từ thư viện, lỗi hệ thống)
-  console.error(`Unexpected error in ${contextMessage}:`, error);
-  // Chuyển thành AppError với thông báo chung chung hơn để không lộ chi tiết lỗi nhạy cảm
-  throw new AppError(
-    `Lỗi xảy ra khi ${contextMessage}. Vui lòng thử lại sau. Chi tiết: ${error.message}`,
-    500
-  );
-};
-
-export { AppError, handleServiceError };
-```
-
-## File: migrations/20250518153005-create-users.js
-```javascript
-'use strict';
-
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
-  async up (queryInterface, Sequelize) {
-    /**
-     * Add altering commands here.
-     *
-     * Example:
-     * await queryInterface.createTable('users', { id: Sequelize.INTEGER });
-     */
-  },
-
-  async down (queryInterface, Sequelize) {
-    /**
-     * Add reverting commands here.
-     *
-     * Example:
-     * await queryInterface.dropTable('users');
-     */
-  }
-};
-```
 
 ## File: migrations/20250601000000-create-vods.js
 ```javascript
@@ -327,698 +266,6 @@ export const getChatHistory = async (req, res) => {
       .status(500)
       .json({ message: "Error fetching chat history", error: error.message });
   }
-};
-```
-
-## File: src/controllers/vodController.js
-```javascript
-import { vodService } from "../services/vodService.js";
-import { AppError } from "../utils/errorHandler.js";
-import { matchedData, validationResult } from "express-validator"; // Sử dụng express-validator để validate
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
-
-/**
- * @route   POST /api/vod/upload
- * @desc    (Admin/Manual Upload) Tạo một VOD mới. Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
- *          Endpoint này dành cho trường hợp upload thủ công, không qua luồng Nginx webhook.
- * @access  Private (Admin)
- */
-const uploadVOD = async (req, res, next) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      const firstError = errors.array({ onlyFirstError: true })[0];
-      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
-    }
-
-    const validatedData = matchedData(req);
-    const userId = req.user?.id; // req.user được gán bởi authMiddleware
-
-    if (!userId) {
-      // Hoặc kiểm tra role admin ở đây nếu endpoint này chỉ cho admin
-      throw new AppError(
-        "Xác thực thất bại hoặc userId không được cung cấp.",
-        401
-      );
-    }
-
-    // Dữ liệu cần thiết cho upload thủ công:
-    const {
-      streamId, // Tùy chọn, nhưng nên có nếu liên kết với stream cũ
-      streamKey, // Tùy chọn
-      title,
-      description,
-      videoUrl, // Pre-signed URL đã có
-      urlExpiresAt, // Thời điểm URL hết hạn
-      b2FileId, // ID file trên B2
-      b2FileName, // Tên file trên B2
-      thumbnail, // URL thumbnail (có thể cũng là pre-signed)
-      durationSeconds, // Thời lượng video
-    } = validatedData;
-
-    // Service createVOD đã được cập nhật để xử lý các trường này
-    const newVOD = await vodService.createVOD({
-      userId,
-      streamId,
-      streamKey,
-      title,
-      description,
-      videoUrl,
-      urlExpiresAt: new Date(urlExpiresAt), // Chuyển đổi sang Date object nếu cần
-      b2FileId,
-      b2FileName,
-      thumbnail,
-      durationSeconds,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "VOD đã được tạo thành công (thủ công).",
-      data: newVOD,
-    });
-  } catch (error) {
-    next(error); // Chuyển lỗi cho error handling middleware
-  }
-};
-
-/**
- * @route   GET /api/vod
- * @desc    Lấy danh sách VOD, hỗ trợ filter và phân trang.
- * @access  Public (hoặc Private tùy theo yêu cầu)
- */
-const getAllVODs = async (req, res, next) => {
-  try {
-    // Lấy các query params cho filter và pagination
-    const {
-      streamId,
-      userId,
-      streamKey,
-      page,
-      limit,
-      sortBy = "createdAt", // Mặc định sắp xếp theo ngày tạo
-      sortOrder = "DESC", // Mặc định giảm dần
-    } = req.query;
-
-    const options = {
-      streamId: streamId ? parseInt(streamId) : undefined,
-      userId: userId ? parseInt(userId) : undefined,
-      streamKey: streamKey ? String(streamKey) : undefined,
-      page: page ? parseInt(page) : 1,
-      limit: limit ? parseInt(limit) : 10,
-      sortBy: String(sortBy),
-      sortOrder: String(sortOrder).toUpperCase() === "ASC" ? "ASC" : "DESC",
-    };
-
-    const result = await vodService.getVODs(options);
-
-    res.status(200).json({
-      success: true,
-      data: result.vods, // Service đã trả về các trường cần thiết, bao gồm urlExpiresAt
-      pagination: {
-        totalItems: result.totalItems,
-        totalPages: result.totalPages,
-        currentPage: result.currentPage,
-        limit: options.limit,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   GET /api/vod/:id
- * @desc    Lấy chi tiết một VOD bằng ID. Pre-signed URL sẽ được tự động làm mới nếu cần.
- * @access  Public (hoặc Private tùy theo yêu cầu)
- */
-const getVODDetails = async (req, res, next) => {
-  try {
-    const vodId = parseInt(req.params.id);
-    if (isNaN(vodId)) {
-      throw new AppError("ID VOD không hợp lệ.", 400);
-    }
-
-    // vodService.getVODById sẽ tự động refresh URL nếu cần
-    const vod = await vodService.getVODById(vodId);
-
-    res.status(200).json({
-      success: true,
-      data: vod, // Đã bao gồm videoUrl và urlExpiresAt được cập nhật nếu cần
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   DELETE /api/vod/:id
- * @desc    Xóa một VOD (yêu cầu quyền chủ sở hữu hoặc admin).
- *          Sẽ xóa cả file trên B2.
- * @access  Private
- */
-const removeVOD = async (req, res, next) => {
-  try {
-    const vodId = parseInt(req.params.id);
-    if (isNaN(vodId)) {
-      throw new AppError("ID VOD không hợp lệ.", 400);
-    }
-
-    const requestingUserId = req.user?.id;
-    const isAdmin = req.user?.role === "admin"; // Giả sử có trường role trong req.user
-
-    if (!requestingUserId) {
-      throw new AppError("Xác thực thất bại, không tìm thấy người dùng.", 401);
-    }
-
-    // vodService.deleteVOD sẽ xử lý cả việc xóa file trên B2
-    await vodService.deleteVOD(vodId, requestingUserId, isAdmin);
-
-    res.status(200).json({
-      success: true,
-      message: "VOD đã được xóa thành công.",
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   POST /api/vod/:id/refresh-url
- * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
- * @access  Private
- */
-const refreshVODSignedUrl = async (req, res, next) => {
-  try {
-    const vodId = parseInt(req.params.id);
-    if (isNaN(vodId)) {
-      throw new AppError("ID VOD không hợp lệ.", 400);
-    }
-
-    const requestingUserId = req.user?.id;
-    const isAdmin = req.user?.role === "admin";
-
-    if (!requestingUserId) {
-      throw new AppError("Xác thực thất bại.", 401);
-    }
-
-    // Kiểm tra quyền: Chỉ admin hoặc chủ sở hữu VOD mới được refresh (tùy chọn)
-    // Hoặc chỉ cần user đã đăng nhập là đủ nếu không quá khắt khe
-    // const vod = await vodService.getVODById(vodId); // Lấy VOD để check owner nếu cần (getVODById có thể refresh rồi)
-    // if (!isAdmin && vod.userId !== requestingUserId) {
-    //     throw new AppError("Bạn không có quyền làm mới URL cho VOD này.", 403);
-    // }
-
-    const refreshedInfo = await vodService.refreshVODUrl(vodId);
-
-    res.status(200).json({
-      success: true,
-      message: "Pre-signed URL cho VOD đã được làm mới thành công.",
-      data: refreshedInfo, // Gồm id, videoUrl, urlExpiresAt mới
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const vodController = {
-  uploadVOD,
-  getAllVODs,
-  getVODDetails,
-  removeVOD,
-  refreshVODSignedUrl, 
-};
-```
-
-## File: src/controllers/webhookController.js
-```javascript
-import { markLive, markEnded } from "../services/streamService.js";
-import { vodService } from "../services/vodService.js"; // Thêm VOD service
-// import logger from "../utils/logger.js"; // Giả sử bạn có một utility logger
-
-// Thay thế logger tạm thời bằng console.log nếu chưa có utility logger
-const logger = {
-  info: console.log,
-  error: console.error,
-};
-
-export async function handleStreamEvent(req, res) {
-  // Dữ liệu từ nginx-rtmp-module thường là x-www-form-urlencoded
-  const { call, name, tcurl } = req.body; // 'name' thường là streamKey, 'call' là loại sự kiện
-  let eventType = "";
-  let streamKey = name;
-
-  // Xác định loại sự kiện dựa trên giá trị của 'call'
-  // Thêm event từ query param nếu có (cho nginx.conf mới)
-  const eventFromQuery = req.query.event;
-
-  if (call === "publish" || eventFromQuery === "publish") {
-    eventType = "on_publish";
-  } else if (
-    call === "done" ||
-    call === "publish_done" ||
-    eventFromQuery === "publish_done"
-  ) {
-    // 'done' hoặc 'publish_done' tùy cấu hình/phiên bản
-    eventType = "on_done";
-  }
-  // Thêm các trường hợp khác nếu media server của bạn gửi các giá trị 'call' khác
-  // ví dụ: 'play', 'play_done', 'record_done'
-
-  // Lấy viewerCount - nginx-rtmp-module có thể không gửi trực tiếp viewerCount cho on_done.
-  // Thông tin này có thể cần lấy từ API thống kê của media server hoặc một cơ chế khác.
-  // Trong ví dụ này, chúng ta sẽ bỏ qua viewerCount nếu không có.
-  const viewerCount = req.body.viewerCount; // Hoặc một tên trường khác nếu media server gửi
-
-  if (!eventType || !streamKey) {
-    logger.error(
-      "Webhook stream-event received with missing call/name (event/streamKey):",
-      req.body,
-      req.query
-    );
-    return res.status(400).json({ message: "Missing call/name parameters." });
-  }
-
-  logger.info(
-    `Webhook stream-event received: RawCall - ${call}, MappedEvent - ${eventType}, StreamKey - ${streamKey}, ViewerCount - ${viewerCount}, QueryEvent - ${eventFromQuery}`
-  );
-  logger.info("Full webhook stream-event body:", req.body);
-
-  try {
-    switch (eventType) {
-      case "on_publish":
-        // URL ingest đầy đủ thường là tcurl (rtmp://host/app) + name (streamkey)
-        // Bạn có thể log tcurl + name để xem xét nếu cần.
-        logger.info(`Stream starting: ${tcurl}/${name}`);
-        await markLive(streamKey);
-        logger.info(
-          `Stream ${streamKey} marked as live via webhook (event: ${eventType}).`
-        );
-        break;
-      case "on_done":
-        await markEnded(streamKey, viewerCount); // viewerCount có thể undefined
-        logger.info(
-          `Stream ${streamKey} marked as ended via webhook (event: ${eventType}).`
-        );
-        break;
-      default:
-        logger.info(
-          `Webhook stream-event received unhandled call type: ${call} for ${streamKey}`
-        );
-        return res.status(200).json({
-          message: "Event call type received but not specifically handled.",
-        });
-    }
-    return res.status(200).json({
-      message: `Webhook event '${eventType}' (from call '${call}') processed successfully.`,
-    });
-  } catch (err) {
-    logger.error(
-      `Error processing webhook event ${eventType} for ${streamKey}:`,
-      err.message
-    );
-    return res.status(500).json({ message: "Error processing webhook event." });
-  }
-}
-
-/**
- * Xử lý webhook 'on_record_done' từ Nginx sau khi stream đã được ghi lại.
- * Nginx sẽ gửi thông tin về file đã ghi, bao gồm đường dẫn.
- */
-export async function handleStreamRecordDone(req, res) {
-  // Nginx thường gửi dữ liệu dạng x-www-form-urlencoded cho webhook này
-  const { name, path: recordedFilePathInNginx } = req.body;
-  const streamKey = name;
-
-  if (!streamKey || !recordedFilePathInNginx) {
-    logger.error(
-      "Webhook on_record_done received with missing name (streamKey) or path:",
-      req.body
-    );
-    return res
-      .status(400)
-      .json({ message: "Missing streamKey or recorded file path." });
-  }
-
-  logger.info(
-    `Webhook on_record_done received: StreamKey - ${streamKey}, RecordedPathInNginx - ${recordedFilePathInNginx}`
-  );
-  logger.info("Full on_record_done body:", req.body);
-
-  try {
-    // Gọi service để xử lý file VOD (convert, upload, save metadata)
-    // Giả định đường dẫn từ Nginx container cần được điều chỉnh cho Node.js container
-    // Ví dụ: Nginx path /var/rec/live/xyz.flv -> Node.js path /mnt/recordings/live/xyz.flv
-    // Điều này phụ thuộc vào cấu hình Docker volume mounts của bạn.
-    // Cần có một hàm để ánh xạ đường dẫn này.
-    const NGINX_REC_BASE_PATH = "/var/rec"; // Đường dẫn gốc trong Nginx
-    const NODE_REC_BASE_PATH =
-      process.env.NODE_RECORDING_PATH || "/mnt/recordings"; // Đường dẫn gốc trong Node.js (cấu hình qua .env)
-
-    if (!recordedFilePathInNginx.startsWith(NGINX_REC_BASE_PATH)) {
-      logger.error(
-        `Recorded file path ${recordedFilePathInNginx} does not start with expected Nginx base path ${NGINX_REC_BASE_PATH}`
-      );
-      throw new Error("Invalid recorded file path prefix from Nginx.");
-    }
-
-    const relativePath = recordedFilePathInNginx.substring(
-      NGINX_REC_BASE_PATH.length
-    );
-    const localFilePath = `${NODE_REC_BASE_PATH}${relativePath}`;
-
-    logger.info(
-      `Processing VOD: StreamKey - ${streamKey}, MappedLocalPath - ${localFilePath}`
-    );
-
-    // Gọi vodService để xử lý
-    const vodResult = await vodService.processRecordedFileToVOD({
-      streamKey,
-      originalFilePath: localFilePath, // Đường dẫn file gốc (FLV) trên server mà Node.js có thể truy cập
-      originalFileName: recordedFilePathInNginx.split("/").pop(), // Tên file gốc, ví dụ: streamkey.flv
-    });
-
-    logger.info(
-      `VOD processing completed for streamKey ${streamKey}. VOD ID: ${vodResult.id}`
-    );
-
-    return res.status(200).json({
-      message: "Stream recording processed and VOD created successfully.",
-      vod: vodResult,
-    });
-  } catch (err) {
-    logger.error(
-      `Error processing on_record_done for streamKey ${streamKey}:`,
-      err.message,
-      err.stack // Log stack trace để debug dễ hơn
-    );
-    // Trả về lỗi chi tiết hơn nếu có thể
-    const statusCode = err.isAppError ? err.statusCode : 500;
-    return res.status(statusCode).json({
-      message: "Error processing stream recording.",
-      error: err.message,
-    });
-  }
-}
-```
-
-## File: src/lib/b2.service.js
-```javascript
-import B2 from "backblaze-b2";
-import fs from "fs/promises";
-import path from "path";
-import dotenv from "dotenv";
-
-dotenv.config(); // Load environment variables from .env file
-
-// Load configuration from environment variables
-const APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
-const APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const BUCKET_ID = process.env.B2_BUCKET_ID;
-const BUCKET_NAME = process.env.B2_BUCKET_NAME;
-// B2_DOWNLOAD_HOST is used if constructing URLs manually,
-// but b2.authorize() provides the most accurate downloadUrl (account's base download URL)
-
-if (!APPLICATION_KEY_ID || !APPLICATION_KEY || !BUCKET_ID || !BUCKET_NAME) {
-  console.error(
-    "Missing Backblaze B2 environment variables. Please check your .env file."
-  );
-  // Optionally, throw an error or exit if configuration is critical
-  // process.exit(1);
-}
-
-const b2 = new B2({
-  applicationKeyId: APPLICATION_KEY_ID,
-  applicationKey: APPLICATION_KEY,
-});
-
-/**
- * Authorizes with B2. This should be called before any B2 operations.
- * Returns the authorization data including the downloadUrl.
- * @returns {Promise<object>} Authorization data from B2, including downloadUrl.
- */
-async function authorizeB2() {
-  try {
-    const authData = await b2.authorize();
-    console.log("Successfully authorized with Backblaze B2.");
-    return authData.data; // Return the actual data object from the response
-  } catch (error) {
-    console.error("Error authorizing with Backblaze B2:", error);
-    throw error;
-  }
-}
-
-/**
- * Uploads a file to Backblaze B2 and generates a pre-signed URL for private access.
- * @param {string} localFilePath - The absolute path to the local file.
- * @param {string} originalFileName - The original name of the file (e.g., streamkey.flv).
- * @param {number} [presignedUrlDuration=3600] - Duration in seconds for which the pre-signed URL is valid (default 1 hour).
- * @returns {Promise<object>} - An object containing b2FileId, b2FileName, and a pre-signed viewableUrl.
- */
-async function uploadToB2AndGetPresignedUrl(
-  localFilePath,
-  originalFileName,
-  presignedUrlDuration = 3600
-) {
-  try {
-    const authData = await authorizeB2(); // Ensure we are authorized and get auth data
-    const accountDownloadUrl = authData.downloadUrl; // Base URL for downloads for this account
-
-    const fileData = await fs.readFile(localFilePath);
-    const fileExtension = path.extname(originalFileName) || ".flv";
-    const baseFileName = path.basename(originalFileName, fileExtension);
-    const fileNameInB2 = `vods/${baseFileName}-${Date.now()}${fileExtension}`;
-
-    console.log(
-      `Attempting to upload ${localFilePath} as ${fileNameInB2} to bucket ${BUCKET_ID}`
-    );
-
-    const {
-      data: { uploadUrl, authorizationToken: uploadAuthToken },
-    } = await b2.getUploadUrl({ bucketId: BUCKET_ID });
-
-    const uploadedFileResponse = await b2.uploadFile({
-      uploadUrl: uploadUrl,
-      uploadAuthToken: uploadAuthToken,
-      fileName: fileNameInB2,
-      data: fileData,
-      onUploadProgress: (event) => {
-        if (event.bytesLoaded && event.totalBytes) {
-          const percent = Math.round(
-            (event.bytesLoaded / event.totalBytes) * 100
-          );
-          console.log(`Upload progress for ${fileNameInB2}: ${percent}%`);
-        }
-      },
-    });
-
-    const b2FileId = uploadedFileResponse.data.fileId;
-    const b2FileName = uploadedFileResponse.data.fileName;
-
-    console.log(
-      `File ${b2FileName} (ID: ${b2FileId}) uploaded successfully to B2.`
-    );
-
-    // Generate a pre-signed URL for the private file
-    const {
-      data: { authorizationToken: downloadAuthToken },
-    } = await b2.getDownloadAuthorization({
-      bucketId: BUCKET_ID,
-      fileNamePrefix: b2FileName, // Authorize this specific file
-      validDurationInSeconds: presignedUrlDuration, // e.g., 1 hour
-    });
-
-    // Construct the pre-signed URL
-    // Format: <accountDownloadUrl>/file/<bucketName>/<fileName>?Authorization=<downloadAuthToken>
-    const viewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${downloadAuthToken}`;
-
-    console.log(
-      `Generated pre-signed URL (valid for ${presignedUrlDuration}s): ${viewableUrl}`
-    );
-
-    return {
-      b2FileId,
-      b2FileName,
-      viewableUrl, // This is the pre-signed URL
-      message: "File uploaded successfully to B2 and pre-signed URL generated.",
-    };
-  } catch (error) {
-    console.error(
-      `Error in B2 service for file ${localFilePath}:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details:", error.response.data);
-    }
-    throw new Error(`B2 service error: ${error.message}`);
-  }
-}
-
-/**
- * Generates a new pre-signed URL for an existing private file in B2.
- * @param {string} b2FileName - The name of the file in B2 (e.g., vods/streamkey-timestamp.flv).
- * @param {number} [presignedUrlDuration=3600] - Duration in seconds for which the new URL is valid.
- * @returns {Promise<string>} - The new pre-signed URL.
- */
-async function generatePresignedUrlForExistingFile(
-  b2FileName,
-  presignedUrlDuration = 3600
-) {
-  try {
-    const authData = await authorizeB2();
-    const accountDownloadUrl = authData.downloadUrl;
-
-    const {
-      data: { authorizationToken: newDownloadAuthToken },
-    } = await b2.getDownloadAuthorization({
-      bucketId: BUCKET_ID,
-      fileNamePrefix: b2FileName,
-      validDurationInSeconds: presignedUrlDuration,
-    });
-
-    const newViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${newDownloadAuthToken}`;
-
-    console.log(
-      `Generated new pre-signed URL for ${b2FileName} (valid for ${presignedUrlDuration}s): ${newViewableUrl}`
-    );
-    return newViewableUrl;
-  } catch (error) {
-    console.error(
-      `Error generating new pre-signed URL for ${b2FileName}:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details:", error.response.data);
-    }
-    throw new Error(
-      `Failed to generate new pre-signed URL for ${b2FileName}: ${error.message}`
-    );
-  }
-}
-
-/**
- * Deletes a file from Backblaze B2.
- * @param {string} fileName - The name of the file in B2.
- * @param {string} fileId - The ID of the file in B2.
- * @returns {Promise<object>} - Confirmation from B2.
- */
-async function deleteFileFromB2(fileName, fileId) {
-  try {
-    await authorizeB2(); // Ensure we are authorized
-
-    console.log(
-      `Attempting to delete file ${fileName} (ID: ${fileId}) from B2.`
-    );
-
-    const response = await b2.deleteFileVersion({
-      fileName: fileName,
-      fileId: fileId,
-    });
-
-    console.log(
-      `File ${fileName} (ID: ${fileId}) deleted successfully from B2.`
-    );
-    return response.data;
-  } catch (error) {
-    console.error(
-      `Error deleting file ${fileName} (ID: ${fileId}) from B2:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details for delete:", error.response.data);
-    }
-    // Decide if you want to throw an error that stops the VOD deletion process
-    // or just log it and proceed with DB deletion.
-    // For now, let's throw to indicate B2 deletion failure.
-    throw new Error(
-      `Failed to delete file ${fileName} from B2: ${error.message}`
-    );
-  }
-}
-
-// Export the main function to be used by other services
-export {
-  uploadToB2AndGetPresignedUrl,
-  authorizeB2,
-  generatePresignedUrlForExistingFile,
-  deleteFileFromB2,
-};
-```
-
-## File: src/middlewares/validators/vodValidator.js
-```javascript
-import { body, param } from "express-validator";
-
-// Validator cho việc tạo/upload VOD thủ công bởi admin
-const manualUploadVOD = [
-  body("title")
-    .trim()
-    .notEmpty()
-    .withMessage("Tiêu đề VOD không được để trống.")
-    .isLength({ min: 3, max: 255 })
-    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
-  body("description")
-    .optional()
-    .trim()
-    .isLength({ max: 5000 })
-    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
-
-  // Các trường này là bắt buộc khi upload thủ công VOD đã có trên B2
-  body("videoUrl")
-    .trim()
-    .notEmpty()
-    .withMessage("videoUrl (pre-signed URL từ B2) không được để trống.")
-    .isURL()
-    .withMessage("videoUrl phải là một URL hợp lệ."),
-  body("urlExpiresAt")
-    .notEmpty()
-    .withMessage(
-      "urlExpiresAt (thời điểm hết hạn của videoUrl) không được để trống."
-    )
-    .isISO8601()
-    .withMessage("urlExpiresAt phải là một ngày hợp lệ theo định dạng ISO8601.")
-    .toDate(), // Chuyển đổi thành Date object
-  body("b2FileId")
-    .trim()
-    .notEmpty()
-    .withMessage("b2FileId (ID file trên B2) không được để trống."),
-  body("b2FileName")
-    .trim()
-    .notEmpty()
-    .withMessage("b2FileName (tên file trên B2) không được để trống."),
-  body("durationSeconds")
-    .notEmpty()
-    .withMessage(
-      "durationSeconds (thời lượng video tính bằng giây) không được để trống."
-    )
-    .isInt({ gt: 0 })
-    .withMessage("durationSeconds phải là một số nguyên dương.")
-    .toInt(),
-
-  // Các trường tùy chọn
-  body("streamId")
-    .optional()
-    .isInt({ gt: 0 })
-    .withMessage("streamId (nếu có) phải là một số nguyên dương.")
-    .toInt(),
-  body("streamKey")
-    .optional()
-    .trim()
-    .notEmpty()
-    .withMessage("streamKey (nếu có) không được để trống."),
-  body("thumbnail")
-    .optional()
-    .trim()
-    .isURL()
-    .withMessage("Thumbnail (nếu có) phải là một URL hợp lệ."),
-  // userId sẽ được lấy từ token xác thực, không cần validate ở đây
-];
-
-export const vodValidationRules = {
-  manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
 };
 ```
 
@@ -1225,77 +472,6 @@ router.get("/:streamId", validateGetStreamById, getStreamById);
 export default router;
 ```
 
-## File: src/routes/vodRoutes.js
-```javascript
-import express from "express";
-import { vodController } from "../controllers/vodController.js";
-import authenticateToken from "../middlewares/authMiddleware.js"; // Đổi tên import cho đúng với file export
-import { vodValidationRules } from "../middlewares/validators/vodValidator.js";
-// import upload from '../middlewares/uploadMiddleware.js'; // Tùy chọn: Middleware cho upload file (ví dụ: multer)
-
-const router = express.Router();
-
-/**
- * @route   POST /api/vod/upload
- * @desc    (Admin/Manual Upload) Tạo một VOD mới.
- *          Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
- * @access  Private (Admin - yêu cầu xác thực)
- */
-router.post(
-  "/upload",
-  authenticateToken, // Sử dụng tên middleware đã import chính xác
-  // upload.single('videoFile'), // Ví dụ: nếu client upload file video tên là 'videoFile'
-  vodValidationRules.manualUploadVOD, // Sử dụng validator mới cho manual upload
-  vodController.uploadVOD
-);
-
-/**
- * @route   GET /api/vod
- * @desc    Lấy danh sách VOD.
- * @access  Public (hoặc authMiddleware nếu cần Private)
- */
-router.get(
-  "/",
-  // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
-  vodController.getAllVODs
-);
-
-/**
- * @route   GET /api/vod/:id
- * @desc    Lấy chi tiết một VOD.
- * @access  Public (hoặc authMiddleware nếu cần Private)
- */
-router.get(
-  "/:id",
-  // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
-  vodController.getVODDetails
-);
-
-/**
- * @route   DELETE /api/vod/:id
- * @desc    Xóa một VOD.
- * @access  Private (chỉ chủ sở hữu hoặc admin)
- */
-router.delete(
-  "/:id",
-  authenticateToken, // Yêu cầu xác thực
-  vodController.removeVOD
-);
-
-/**
- * @route   POST /api/vod/:id/refresh-url
- * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
- * @access  Private (yêu cầu xác thực)
- */
-router.post(
-  "/:id/refresh-url",
-  authenticateToken, // Yêu cầu xác thực
-  vodController.refreshVODSignedUrl
-);
-
-export default router;
-```
-
 ## File: src/services/chatService.js
 ```javascript
 import ChatMessage from "../models/mongo/ChatMessage.js";
@@ -1372,608 +548,6 @@ export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
     console.error("Error fetching chat history in service:", error);
     throw new Error("Failed to fetch chat history: " + error.message);
   }
-};
-```
-
-## File: src/services/vodService.js
-```javascript
-import { VOD, User, Stream } from "../models/index.js";
-import { AppError, handleServiceError } from "../utils/errorHandler.js";
-import {
-  uploadToB2AndGetPresignedUrl,
-  deleteFileFromB2,
-  generatePresignedUrlForExistingFile,
-} from "../lib/b2.service.js";
-import fs from "fs/promises";
-import path from "path";
-import { spawn } from "child_process";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
-
-// Helper function to run FFmpeg/FFprobe commands
-const runFFCommand = (command, args) => {
-  return new Promise((resolve, reject) => {
-    const process = spawn(command, args);
-    let output = "";
-    let errorOutput = "";
-
-    process.stdout.on("data", (data) => {
-      output += data.toString();
-    });
-
-    process.stderr.on("data", (data) => {
-      errorOutput += data.toString();
-    });
-
-    process.on("close", (code) => {
-      if (code === 0) {
-        resolve(output);
-      } else {
-        reject(
-          new AppError(
-            `FFmpeg/FFprobe command '${command} ${args.join(
-              " "
-            )}' failed with code ${code}: ${errorOutput}`,
-            500
-          )
-        );
-      }
-    });
-
-    process.on("error", (err) => {
-      reject(
-        new AppError(
-          `Failed to start FFmpeg/FFprobe command '${command}': ${err.message}`,
-          500
-        )
-      );
-    });
-  });
-};
-
-// Helper function to get video duration using ffprobe
-const getVideoDuration = async (filePath) => {
-  try {
-    const args = [
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      filePath,
-    ];
-    const durationStr = await runFFCommand("ffprobe", args);
-    const duration = parseFloat(durationStr);
-    if (isNaN(duration)) {
-      throw new AppError("Could not parse video duration from ffprobe.", 500);
-    }
-    return Math.round(duration); // Trả về giây, làm tròn
-  } catch (error) {
-    logger.error(`Error getting video duration for ${filePath}:`, error);
-    throw error; // Re-throw để hàm gọi xử lý
-  }
-};
-
-// Helper function to convert FLV to MP4
-const convertFlvToMp4 = async (flvPath, mp4Path) => {
-  try {
-    // -y: overwrite output files without asking
-    // -c:v copy -c:a copy: try to copy codecs first, faster if compatible
-    // if not compatible, ffmpeg will transcode. Add specific codec options if needed.
-    const args = ["-i", flvPath, "-c:v", "copy", "-c:a", "aac", "-y", mp4Path];
-    // Using more robust conversion:
-    // const args = ['-i', flvPath, '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-y', mp4Path];
-    logger.info(`Converting ${flvPath} to ${mp4Path}...`);
-    await runFFCommand("ffmpeg", args);
-    logger.info(`Converted ${flvPath} to ${mp4Path} successfully.`);
-    return mp4Path;
-  } catch (error) {
-    logger.error(`Error converting FLV to MP4 for ${flvPath}:`, error);
-    // Fallback or specific error handling can be added here
-    if (error.message.includes("failed with code 1")) {
-      // Common error if codecs are incompatible for direct copy. Try transcoding.
-      logger.warn("Initial conversion failed, trying with re-encoding...");
-      const transcodeArgs = [
-        "-i",
-        flvPath,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-movflags",
-        "+faststart",
-        "-y",
-        mp4Path,
-      ];
-      try {
-        await runFFCommand("ffmpeg", transcodeArgs);
-        logger.info(`Re-encoded ${flvPath} to ${mp4Path} successfully.`);
-        return mp4Path;
-      } catch (transcodeError) {
-        logger.error(`Re-encoding also failed for ${flvPath}:`, transcodeError);
-        throw transcodeError;
-      }
-    }
-    throw error;
-  }
-};
-
-// Helper function to extract thumbnail
-const extractThumbnail = async (
-  videoPath,
-  thumbnailPath,
-  timestamp = "00:00:05.000"
-) => {
-  try {
-    const args = [
-      "-i",
-      videoPath,
-      "-ss",
-      timestamp, // Seek to 5 seconds
-      "-vframes",
-      "1", // Extract one frame
-      "-vf",
-      "scale=640:-1", // Scale width to 640px, height auto
-      "-y", // Overwrite if exists
-      thumbnailPath,
-    ];
-    logger.info(
-      `Extracting thumbnail from ${videoPath} to ${thumbnailPath}...`
-    );
-    await runFFCommand("ffmpeg", args);
-    logger.info(`Extracted thumbnail to ${thumbnailPath} successfully.`);
-    return thumbnailPath;
-  } catch (error) {
-    logger.error(`Error extracting thumbnail from ${videoPath}:`, error);
-    throw error;
-  }
-};
-
-/**
- * Xử lý file video đã ghi (FLV), chuyển đổi sang MP4, upload lên B2,
- * trích xuất thumbnail, lấy duration, và lưu thông tin VOD vào DB.
- * @param {object} params
- * @param {string} params.streamKey - Khóa của stream.
- * @param {string} params.originalFilePath - Đường dẫn tuyệt đối của file FLV gốc trên server.
- * @param {string} params.originalFileName - Tên file gốc (ví dụ: streamkey.flv).
- * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
- */
-const processRecordedFileToVOD = async ({
-  streamKey,
-  originalFilePath, // e.g., /mnt/recordings/live/streamkey.flv
-  originalFileName, // e.g., streamkey.flv
-}) => {
-  let mp4FilePath = null;
-  let thumbnailFilePath = null;
-  let uploadedVideoInfo = null;
-  let uploadedThumbnailInfo = null;
-  try {
-    // 0. Kiểm tra file gốc tồn tại
-    try {
-      await fs.access(originalFilePath);
-    } catch (e) {
-      throw new AppError(
-        `Original recorded file not found at ${originalFilePath}`,
-        404
-      );
-    }
-
-    // 1. Lấy thông tin Stream từ DB
-    const stream = await Stream.findOne({ where: { streamKey } });
-    if (!stream) {
-      throw new AppError(`Stream with key ${streamKey} not found.`, 404);
-    }
-    if (!stream.userId) {
-      throw new AppError(
-        `User ID not found for stream ${streamKey}. Cannot create VOD without owner.`,
-        400
-      );
-    }
-
-    // 2. Tạo đường dẫn cho file MP4 và Thumbnail
-    const baseName = path.basename(
-      originalFileName,
-      path.extname(originalFileName)
-    ); // streamkey
-    const tempDir = path.dirname(originalFilePath); // /mnt/recordings/live
-
-    mp4FilePath = path.join(tempDir, `${baseName}.mp4`);
-    thumbnailFilePath = path.join(tempDir, `${baseName}-thumbnail.jpg`);
-
-    // 3. Chuyển đổi FLV sang MP4
-    await convertFlvToMp4(originalFilePath, mp4FilePath);
-
-    // 4. Lấy thời lượng video (từ file MP4 đã convert)
-    const durationSeconds = await getVideoDuration(mp4FilePath);
-
-    // 5. Trích xuất Thumbnail (từ file MP4)
-    await extractThumbnail(mp4FilePath, thumbnailFilePath);
-
-    // 6. Upload MP4 lên B2
-    const mp4FileNameInB2 = `vods/${baseName}-${Date.now()}.mp4`;
-    const presignedUrlDuration =
-      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
-
-    logger.info(`Uploading ${mp4FilePath} to B2 as ${mp4FileNameInB2}...`);
-    uploadedVideoInfo = await uploadToB2AndGetPresignedUrl(
-      mp4FilePath,
-      mp4FileNameInB2, // Tên file trên B2
-      presignedUrlDuration
-    );
-
-    // 7. Upload Thumbnail lên B2 (nếu có)
-    let thumbnailUrlOnB2 = null;
-    if (thumbnailFilePath) {
-      try {
-        await fs.access(thumbnailFilePath); // Kiểm tra file thumbnail tồn tại
-        const thumbnailFileNameInB2 = `vods/thumbnails/${baseName}-${Date.now()}.jpg`;
-        logger.info(
-          `Uploading ${thumbnailFilePath} to B2 as ${thumbnailFileNameInB2}...`
-        );
-        // Thumbnails có thể public hoặc pre-signed tùy nhu cầu. Hiện tại đang dùng pre-signed.
-        uploadedThumbnailInfo = await uploadToB2AndGetPresignedUrl(
-          thumbnailFilePath,
-          thumbnailFileNameInB2,
-          presignedUrlDuration
-        );
-        thumbnailUrlOnB2 = uploadedThumbnailInfo.viewableUrl;
-      } catch (thumbUploadError) {
-        logger.error(
-          "Failed to upload thumbnail to B2, proceeding without it:",
-          thumbUploadError
-        );
-        // Không throw lỗi nếu thumbnail thất bại, VOD vẫn có thể được tạo
-      }
-    }
-
-    // 8. Tạo bản ghi VOD trong DB
-    const vodData = {
-      streamId: stream.id,
-      userId: stream.userId,
-      streamKey: streamKey,
-      title: stream.title || `VOD for ${streamKey}`, // Lấy title từ stream hoặc mặc định
-      description: stream.description || "",
-      videoUrl: uploadedVideoInfo.viewableUrl,
-      urlExpiresAt: new Date(Date.now() + presignedUrlDuration * 1000),
-      b2FileId: uploadedVideoInfo.b2FileId,
-      b2FileName: uploadedVideoInfo.b2FileName,
-      thumbnail: thumbnailUrlOnB2, // URL thumbnail trên B2
-      durationSeconds,
-    };
-
-    logger.info("Creating VOD entry in database with data:", vodData);
-    const newVOD = await VOD.create(vodData);
-    logger.info(`VOD entry created with ID: ${newVOD.id}`);
-
-    return newVOD;
-  } catch (error) {
-    logger.error(
-      `Error in processRecordedFileToVOD for streamKey ${streamKey}:`,
-      error
-    );
-    // Xử lý lỗi cụ thể hơn nếu cần
-    handleServiceError(error, "xử lý file ghi hình thành VOD"); // Re-throws AppError
-  } finally {
-    // 9. Xóa file tạm trên server (FLV, MP4, Thumbnail)
-    const filesToDelete = [
-      originalFilePath,
-      mp4FilePath,
-      thumbnailFilePath,
-    ].filter(Boolean);
-    for (const filePath of filesToDelete) {
-      try {
-        if (filePath) {
-          // Check if filePath is not null
-          await fs.access(filePath); // Check if file exists before trying to delete
-          await fs.unlink(filePath);
-          logger.info(`Successfully deleted temporary file: ${filePath}`);
-        }
-      } catch (e) {
-        // Nếu file không tồn tại (ví dụ, mp4FilePath chưa được tạo do lỗi convert) thì bỏ qua
-        if (e.code !== "ENOENT") {
-          logger.error(`Failed to delete temporary file ${filePath}:`, e);
-        }
-      }
-    }
-  }
-};
-
-/**
- * Tạo một bản ghi VOD mới. (Hàm này có thể dùng cho admin upload thủ công)
- * @param {object} vodData - Dữ liệu cho VOD mới.
- * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
- */
-const createVOD = async (vodData) => {
-  try {
-    const {
-      streamId,
-      userId,
-      title,
-      description,
-      videoUrl, // Đây là URL đã có sẵn (ví dụ từ upload thủ công lên B2)
-      urlExpiresAt, // Cần cung cấp nếu videoUrl là pre-signed
-      b2FileId,
-      b2FileName,
-      thumbnail,
-      durationSeconds,
-      streamKey,
-    } = vodData;
-
-    // Kiểm tra streamId và userId nếu được cung cấp
-    if (streamId) {
-      const stream = await Stream.findByPk(streamId);
-      if (!stream) {
-        throw new AppError("Stream không tồn tại.", 404);
-      }
-    }
-    if (userId) {
-      const user = await User.findByPk(userId);
-      if (!user) {
-        throw new AppError("Người dùng không tồn tại.", 404);
-      }
-    }
-    if (!userId && streamId) {
-      // Cố gắng lấy userId từ streamId
-      const stream = await Stream.findByPk(streamId);
-      if (stream && stream.userId) vodData.userId = stream.userId;
-      else throw new AppError("Không thể xác định User ID cho VOD này.", 400);
-    } else if (!userId && !streamId) {
-      throw new AppError("Cần cung cấp userId hoặc streamId để tạo VOD.", 400);
-    }
-
-    if (!videoUrl || !urlExpiresAt || !b2FileName) {
-      throw new AppError(
-        "Cần cung cấp videoUrl, urlExpiresAt, và b2FileName cho VOD upload thủ công.",
-        400
-      );
-    }
-
-    const newVOD = await VOD.create({
-      streamId,
-      userId: vodData.userId, // Đã được cập nhật ở trên nếu cần
-      title,
-      description,
-      videoUrl,
-      urlExpiresAt,
-      b2FileId,
-      b2FileName,
-      thumbnail,
-      durationSeconds,
-      streamKey,
-    });
-
-    return newVOD;
-  } catch (error) {
-    handleServiceError(error, "tạo VOD thủ công");
-  }
-};
-
-/**
- * Lấy danh sách VOD với tùy chọn filter và phân trang.
- * @param {object} options - Tùy chọn truy vấn.
- * @returns {Promise<{vods: VOD[], totalItems: number, totalPages: number, currentPage: number}>}
- */
-const getVODs = async (options = {}) => {
-  try {
-    const { streamId, userId, streamKey, page = 1, limit = 10 } = options;
-    const offset = (page - 1) * limit;
-    const whereClause = {};
-
-    if (streamId) whereClause.streamId = streamId;
-    if (userId) whereClause.userId = userId;
-    if (streamKey) whereClause.streamKey = streamKey;
-
-    const { count, rows } = await VOD.findAndCountAll({
-      where: whereClause,
-      limit,
-      offset,
-      order: [["createdAt", "DESC"]],
-      attributes: [
-        "id",
-        "title",
-        "videoUrl", // Sẽ là pre-signed URL
-        "thumbnail",
-        "durationSeconds",
-        "createdAt",
-        "userId",
-        "streamId",
-        "streamKey",
-        "urlExpiresAt", // Gửi kèm để client biết khi nào URL hết hạn
-        "b2FileName", // Gửi kèm để client/admin có thể yêu cầu refresh URL
-      ],
-      include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
-        // { model: Stream, as: 'stream', attributes: ['id', 'title'] }, // Có thể bỏ nếu đã có streamKey
-      ],
-    });
-
-    // Logic làm mới pre-signed URL nếu cần (ví dụ, chỉ làm mới khi GET chi tiết)
-    // Ở đây chỉ trả về, client sẽ tự quyết định có cần refresh không.
-
-    return {
-      vods: rows,
-      totalItems: count,
-      totalPages: Math.ceil(count / limit),
-      currentPage: parseInt(page, 10),
-    };
-  } catch (error) {
-    handleServiceError(error, "lấy danh sách VOD");
-  }
-};
-
-/**
- * Lấy chi tiết một VOD bằng ID.
- * Sẽ tự động làm mới pre-signed URL nếu nó sắp hết hạn hoặc đã hết hạn.
- * @param {number} vodId - ID của VOD.
- * @returns {Promise<VOD|null>} Đối tượng VOD hoặc null nếu không tìm thấy.
- */
-const getVODById = async (vodId) => {
-  try {
-    let vod = await VOD.findByPk(vodId, {
-      include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
-        {
-          model: Stream,
-          as: "stream",
-          attributes: ["id", "title", "streamKey"],
-        },
-      ],
-    });
-    if (!vod) {
-      throw new AppError("VOD không tìm thấy.", 404);
-    }
-
-    // Kiểm tra và làm mới pre-signed URL nếu cần
-    // Ví dụ: làm mới nếu URL hết hạn trong vòng 1 giờ tới
-    const presignedUrlDuration =
-      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
-    const now = new Date();
-    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
-
-    if (!vod.urlExpiresAt || new Date(vod.urlExpiresAt) < oneHourFromNow) {
-      if (vod.b2FileName) {
-        logger.info(
-          `Pre-signed URL for VOD ${vodId} (file: ${vod.b2FileName}) is expired or expiring soon. Refreshing...`
-        );
-        const newViewableUrl = await generatePresignedUrlForExistingFile(
-          vod.b2FileName,
-          presignedUrlDuration
-        );
-        vod.videoUrl = newViewableUrl;
-        vod.urlExpiresAt = new Date(Date.now() + presignedUrlDuration * 1000);
-
-        // Làm mới cả thumbnail nếu có
-        if (vod.thumbnail && vod.thumbnail.includes("?Authorization=")) {
-          // Giả sử thumbnail cũng là pre-signed
-          // Cần logic để lấy b2FileName của thumbnail, hiện tại chưa lưu riêng
-          // Tạm thời bỏ qua refresh thumbnail hoặc giả sử thumbnail có URL public/thời hạn dài hơn
-          // Nếu thumbnail cũng từ B2 và private, bạn cần lưu b2FileName của thumbnail riêng.
-        }
-
-        await vod.save();
-        logger.info(
-          `Refreshed pre-signed URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
-        );
-      } else {
-        logger.warn(
-          `VOD ${vodId} needs URL refresh but b2FileName is missing.`
-        );
-      }
-    }
-
-    return vod;
-  } catch (error) {
-    handleServiceError(error, "lấy chi tiết VOD");
-  }
-};
-
-/**
- * Xóa một VOD (metadata trong DB và file trên storage).
- * @param {number} vodId - ID của VOD cần xóa.
- * @param {number} requestingUserId - ID của người dùng yêu cầu xóa.
- * @param {boolean} isAdmin - Người dùng có phải là admin không.
- */
-const deleteVOD = async (vodId, requestingUserId, isAdmin = false) => {
-  try {
-    const vod = await VOD.findByPk(vodId);
-    if (!vod) {
-      throw new AppError("VOD không tìm thấy để xóa.", 404);
-    }
-
-    if (!isAdmin && vod.userId !== requestingUserId) {
-      throw new AppError("Bạn không có quyền xóa VOD này.", 403);
-    }
-
-    // 1. Xóa file trên Backblaze B2 (nếu có b2FileId và b2FileName)
-    if (vod.b2FileId && vod.b2FileName) {
-      try {
-        logger.info(
-          `Deleting VOD file from B2: ${vod.b2FileName} (ID: ${vod.b2FileId})`
-        );
-        await deleteFileFromB2(vod.b2FileName, vod.b2FileId);
-        logger.info(`Successfully deleted ${vod.b2FileName} from B2.`);
-      } catch (b2Error) {
-        // Log lỗi nhưng vẫn tiếp tục xóa bản ghi DB, hoặc throw lỗi tùy theo yêu cầu
-        logger.error(
-          `Failed to delete VOD file ${vod.b2FileName} from B2. Error: ${b2Error.message}. Proceeding with DB deletion.`
-        );
-        // throw new AppError(`Lỗi khi xóa file trên B2: ${b2Error.message}`, 500); // Bỏ comment nếu muốn dừng lại khi xóa B2 lỗi
-      }
-    } else {
-      logger.warn(
-        `VOD ${vodId} does not have b2FileId or b2FileName. Skipping B2 deletion.`
-      );
-    }
-
-    // (Tùy chọn) Xóa cả thumbnail trên B2 nếu nó được lưu riêng và có thông tin.
-
-    // 2. Xóa bản ghi VOD khỏi DB
-    await vod.destroy();
-    logger.info(`VOD record ${vodId} deleted from database successfully.`);
-    // Không cần trả về gì, hoặc có thể trả về một thông báo thành công
-  } catch (error) {
-    handleServiceError(error, "xóa VOD");
-  }
-};
-
-// Hàm này để refresh URL cho một VOD cụ thể, có thể gọi từ một endpoint riêng
-const refreshVODUrl = async (vodId) => {
-  try {
-    const vod = await VOD.findByPk(vodId);
-    if (!vod) {
-      throw new AppError("VOD không tìm thấy.", 404);
-    }
-    if (!vod.b2FileName) {
-      throw new AppError(
-        "Không có thông tin file trên B2 (b2FileName) để làm mới URL.",
-        400
-      );
-    }
-
-    const presignedUrlDuration =
-      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
-    const newViewableUrl = await generatePresignedUrlForExistingFile(
-      vod.b2FileName,
-      presignedUrlDuration
-    );
-
-    vod.videoUrl = newViewableUrl;
-    vod.urlExpiresAt = new Date(Date.now() + presignedUrlDuration * 1000);
-    await vod.save();
-
-    logger.info(
-      `Successfully refreshed pre-signed URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
-    );
-    return {
-      id: vod.id,
-      videoUrl: vod.videoUrl,
-      urlExpiresAt: vod.urlExpiresAt,
-    };
-  } catch (error) {
-    handleServiceError(error, "làm mới URL VOD");
-  }
-};
-
-export const vodService = {
-  createVOD,
-  getVODs,
-  getVODById,
-  deleteVOD,
-  processRecordedFileToVOD,
-  refreshVODUrl, // Thêm hàm này để có thể gọi từ controller
 };
 ```
 
@@ -2099,6 +673,42 @@ const initializeSocketHandlers = (io) => {
 };
 
 export default initializeSocketHandlers;
+```
+
+## File: src/utils/errorHandler.js
+```javascript
+// src/utils/errorHandler.js
+
+// Lớp lỗi tùy chỉnh để có thể thêm statusCode và các thông tin khác
+class AppError extends Error {
+  constructor(message, statusCode) {
+    super(message);
+    this.statusCode = statusCode;
+    this.status = `${statusCode}`.startsWith("4") ? "fail" : "error";
+    this.isOperational = true; // Lỗi có thể dự đoán được, không phải bug của lập trình viên
+
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+// Hàm helper để xử lý lỗi trong các service
+const handleServiceError = (error, contextMessage) => {
+  if (error instanceof AppError) {
+    // Nếu lỗi đã là AppError, chỉ cần log thêm context và re-throw
+    console.error(`AppError in ${contextMessage}:`, error.message);
+    throw error;
+  }
+
+  // Nếu là lỗi khác (ví dụ: lỗi từ thư viện, lỗi hệ thống)
+  console.error(`Unexpected error in ${contextMessage}:`, error);
+  // Chuyển thành AppError với thông báo chung chung hơn để không lộ chi tiết lỗi nhạy cảm
+  throw new AppError(
+    `Lỗi xảy ra khi ${contextMessage}. Vui lòng thử lại sau. Chi tiết: ${error.message}`,
+    500
+  );
+};
+
+export { AppError, handleServiceError };
 ```
 
 ## File: src/validators/streamValidators.js
@@ -2524,6 +1134,267 @@ export const login = async (req, res) => {
 };
 ```
 
+## File: src/controllers/webhookController.js
+```javascript
+import { markLive, markEnded } from "../services/streamService.js";
+import { vodService } from "../services/vodService.js"; // Thêm VOD service
+// import logger from "../utils/logger.js"; // Giả sử bạn có một utility logger
+
+// Thay thế logger tạm thời bằng console.log nếu chưa có utility logger
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+export async function handleStreamEvent(req, res) {
+  // Dữ liệu từ nginx-rtmp-module thường là x-www-form-urlencoded
+  const { call, name, tcurl } = req.body; // 'name' thường là streamKey, 'call' là loại sự kiện
+  let eventType = "";
+  let streamKey = name;
+
+  // Xác định loại sự kiện dựa trên giá trị của 'call'
+  // Thêm event từ query param nếu có (cho nginx.conf mới)
+  const eventFromQuery = req.query.event;
+
+  if (call === "publish" || eventFromQuery === "publish") {
+    eventType = "on_publish";
+  } else if (
+    call === "done" ||
+    call === "publish_done" ||
+    eventFromQuery === "publish_done"
+  ) {
+    // 'done' hoặc 'publish_done' tùy cấu hình/phiên bản
+    eventType = "on_done";
+  }
+  // Thêm các trường hợp khác nếu media server của bạn gửi các giá trị 'call' khác
+  // ví dụ: 'play', 'play_done', 'record_done'
+
+  // Lấy viewerCount - nginx-rtmp-module có thể không gửi trực tiếp viewerCount cho on_done.
+  // Thông tin này có thể cần lấy từ API thống kê của media server hoặc một cơ chế khác.
+  // Trong ví dụ này, chúng ta sẽ bỏ qua viewerCount nếu không có.
+  const viewerCount = req.body.viewerCount; // Hoặc một tên trường khác nếu media server gửi
+
+  if (!eventType || !streamKey) {
+    logger.error(
+      "Webhook stream-event received with missing call/name (event/streamKey):",
+      req.body,
+      req.query
+    );
+    return res.status(400).json({ message: "Missing call/name parameters." });
+  }
+
+  logger.info(
+    `Webhook stream-event received: RawCall - ${call}, MappedEvent - ${eventType}, StreamKey - ${streamKey}, ViewerCount - ${viewerCount}, QueryEvent - ${eventFromQuery}`
+  );
+  logger.info("Full webhook stream-event body:", req.body);
+
+  try {
+    switch (eventType) {
+      case "on_publish":
+        // URL ingest đầy đủ thường là tcurl (rtmp://host/app) + name (streamkey)
+        // Bạn có thể log tcurl + name để xem xét nếu cần.
+        logger.info(`Stream starting: ${tcurl}/${name}`);
+        await markLive(streamKey);
+        logger.info(
+          `Stream ${streamKey} marked as live via webhook (event: ${eventType}).`
+        );
+        break;
+      case "on_done":
+        await markEnded(streamKey, viewerCount); // viewerCount có thể undefined
+        logger.info(
+          `Stream ${streamKey} marked as ended via webhook (event: ${eventType}).`
+        );
+        break;
+      default:
+        logger.info(
+          `Webhook stream-event received unhandled call type: ${call} for ${streamKey}`
+        );
+        return res.status(200).json({
+          message: "Event call type received but not specifically handled.",
+        });
+    }
+    return res.status(200).json({
+      message: `Webhook event '${eventType}' (from call '${call}') processed successfully.`,
+    });
+  } catch (err) {
+    logger.error(
+      `Error processing webhook event ${eventType} for ${streamKey}:`,
+      err.message
+    );
+    return res.status(500).json({ message: "Error processing webhook event." });
+  }
+}
+
+/**
+ * Xử lý webhook 'on_record_done' từ Nginx sau khi stream đã được ghi lại.
+ * Nginx sẽ gửi thông tin về file đã ghi, bao gồm đường dẫn.
+ */
+export async function handleStreamRecordDone(req, res) {
+  // Nginx thường gửi dữ liệu dạng x-www-form-urlencoded cho webhook này
+  const { name, path: recordedFilePathInNginx } = req.body;
+  const streamKey = name;
+
+  if (!streamKey || !recordedFilePathInNginx) {
+    logger.error(
+      "Webhook on_record_done received with missing name (streamKey) or path:",
+      req.body
+    );
+    return res
+      .status(400)
+      .json({ message: "Missing streamKey or recorded file path." });
+  }
+
+  logger.info(
+    `Webhook on_record_done received: StreamKey - ${streamKey}, RecordedPathInNginx - ${recordedFilePathInNginx}`
+  );
+  logger.info("Full on_record_done body:", req.body);
+
+  try {
+    // Gọi service để xử lý file VOD (convert, upload, save metadata)
+    // Giả định đường dẫn từ Nginx container cần được điều chỉnh cho Node.js container
+    // Ví dụ: Nginx path /var/rec/live/xyz.flv -> Node.js path /mnt/recordings/live/xyz.flv
+    // Điều này phụ thuộc vào cấu hình Docker volume mounts của bạn.
+    // Cần có một hàm để ánh xạ đường dẫn này.
+    const NGINX_REC_BASE_PATH = "/var/rec"; // Đường dẫn gốc trong Nginx
+    const NODE_REC_BASE_PATH =
+      process.env.NODE_RECORDING_PATH || "/mnt/recordings"; // Đường dẫn gốc trong Node.js (cấu hình qua .env)
+
+    if (!recordedFilePathInNginx.startsWith(NGINX_REC_BASE_PATH)) {
+      logger.error(
+        `Recorded file path ${recordedFilePathInNginx} does not start with expected Nginx base path ${NGINX_REC_BASE_PATH}`
+      );
+      throw new Error("Invalid recorded file path prefix from Nginx.");
+    }
+
+    const relativePath = recordedFilePathInNginx.substring(
+      NGINX_REC_BASE_PATH.length
+    );
+    const localFilePath = `${NODE_REC_BASE_PATH}${relativePath}`;
+
+    logger.info(
+      `Processing VOD: StreamKey - ${streamKey}, MappedLocalPath - ${localFilePath}`
+    );
+
+    // Gọi vodService để xử lý
+    const vodResult = await vodService.processRecordedFileToVOD({
+      streamKey,
+      originalFilePath: localFilePath, // Đường dẫn file gốc (FLV) trên server mà Node.js có thể truy cập
+      originalFileName: recordedFilePathInNginx.split("/").pop(), // Tên file gốc, ví dụ: streamkey.flv
+    });
+
+    logger.info(
+      `VOD processing completed for streamKey ${streamKey}. VOD ID: ${vodResult.id}`
+    );
+
+    return res.status(200).json({
+      message: "Stream recording processed and VOD created successfully.",
+      vod: vodResult,
+    });
+  } catch (err) {
+    logger.error(
+      `Error processing on_record_done for streamKey ${streamKey}:`,
+      err.message,
+      err.stack // Log stack trace để debug dễ hơn
+    );
+    // Trả về lỗi chi tiết hơn nếu có thể
+    const statusCode = err.isAppError ? err.statusCode : 500;
+    return res.status(statusCode).json({
+      message: "Error processing stream recording.",
+      error: err.message,
+    });
+  }
+}
+```
+
+## File: src/middlewares/uploadMiddleware.js
+```javascript
+import multer from "multer";
+import path from "path";
+import fs from "fs"; // Thêm fs để kiểm tra và tạo thư mục
+import dotenv from "dotenv"; // Thêm dotenv
+
+dotenv.config(); // Tải biến môi trường
+
+// Đọc đường dẫn thư mục tạm từ biến môi trường
+const tempUploadDir = process.env.TMP_UPLOAD_DIR;
+
+console.log(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
+
+// Đảm bảo thư mục uploads/tmp tồn tại
+if (!fs.existsSync(tempUploadDir)) {
+  try {
+    fs.mkdirSync(tempUploadDir, { recursive: true });
+    console.log(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
+  } catch (err) {
+    console.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
+    throw new Error(`Không thể tạo thư mục upload tạm: ${tempUploadDir}`);
+  }
+}
+
+// Cấu hình lưu trữ cho multer (lưu vào ổ đĩa)
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, tempUploadDir); // Thư mục lưu file tạm
+  },
+  filename: function (req, file, cb) {
+    // Tạo tên file duy nhất để tránh ghi đè, giữ lại phần extension
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(
+      null,
+      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
+    );
+  },
+});
+
+// Hàm kiểm tra loại file (chỉ chấp nhận video và ảnh cho các field tương ứng)
+const videoFileFilter = (req, file, cb) => {
+  const allowedVideoMimeTypes = [
+    "video/mp4",
+    "video/mpeg",
+    "video/quicktime", // .mov
+    "video/x-msvideo", // .avi
+    "video/x-flv", // .flv
+    "video/webm",
+    "video/x-matroska", // .mkv
+  ];
+  const allowedImageMimeTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+  ];
+
+  if (
+    file.fieldname === "videoFile" &&
+    allowedVideoMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else if (
+    file.fieldname === "thumbnailFile" &&
+    allowedImageMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error(
+        `Định dạng file không hợp lệ cho field ${file.fieldname}. Kiểm tra lại các định dạng được chấp nhận.`
+      ),
+      false
+    );
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: videoFileFilter,
+  limits: {
+    fileSize: 1024 * 1024 * 500, // Giới hạn kích thước file: 500MB
+  },
+});
+
+export default upload;
+```
+
 ## File: src/models/stream.js
 ```javascript
 import { DataTypes } from "sequelize";
@@ -2590,88 +1461,6 @@ const Stream = sequelize.define(
 export default Stream;
 ```
 
-## File: src/models/vod.js
-```javascript
-import { DataTypes } from "sequelize";
-import sequelize from "../config/database.js";
-
-const VOD = sequelize.define(
-  "VOD",
-  {
-    id: {
-      allowNull: false,
-      autoIncrement: true,
-      primaryKey: true,
-      type: DataTypes.INTEGER,
-    },
-    streamId: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: "Streams",
-        key: "id",
-      },
-    },
-    streamKey: {
-      // Thêm streamKey để dễ dàng liên kết với thông tin từ Nginx webhook
-      type: DataTypes.STRING,
-      allowNull: true, // Hoặc false nếu bạn luôn có và yêu cầu streamKey
-      // unique: true, // Cân nhắc nếu streamKey phải là duy nhất
-    },
-    userId: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: "Users",
-        key: "id",
-      },
-    },
-    title: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    description: {
-      type: DataTypes.TEXT,
-    },
-    videoUrl: {
-      // Sẽ lưu pre-signed URL
-      type: DataTypes.TEXT, // Pre-signed URLs có thể dài
-      allowNull: false,
-    },
-    urlExpiresAt: {
-      // Thời điểm pre-signed URL hết hạn
-      type: DataTypes.DATE,
-      allowNull: false,
-    },
-    b2FileId: {
-      // ID file trên B2
-      type: DataTypes.STRING,
-      allowNull: true, // Hoặc false nếu đây là thông tin bắt buộc sau khi upload
-    },
-    b2FileName: {
-      // Tên file trên B2
-      type: DataTypes.STRING,
-      allowNull: true, // Hoặc false
-    },
-    thumbnail: {
-      type: DataTypes.STRING,
-    },
-    durationSeconds: {
-      // Đổi tên từ duration để rõ ràng hơn là giây
-      type: DataTypes.INTEGER, // Đơn vị: giây
-    },
-    // createdAt và updatedAt được Sequelize quản lý tự động nếu timestamps: true
-  },
-  {
-    modelName: "VOD",
-    timestamps: true,
-    // tableName: 'VODs'
-  }
-);
-
-export default VOD;
-```
-
 ## File: src/routes/userRoutes.js
 ```javascript
 import express from "express";
@@ -2686,35 +1475,187 @@ router.post("/login", validateUserPayload, login);
 export default router;
 ```
 
-## File: src/routes/webhookRoutes.js
+## File: src/utils/videoUtils.js
 ```javascript
-import express from "express";
-import {
-  handleStreamEvent,
-  handleStreamRecordDone,
-} from "../controllers/webhookController.js";
+// Ví dụ sử dụng fluent-ffmpeg (cần cài đặt: npm install fluent-ffmpeg)
+import ffmpeg from "fluent-ffmpeg";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
-import { verifyWebhookTokenInParam } from "../middlewares/authMiddleware.js";
+/**
+ * Lấy thời lượng của video từ đường dẫn file.
+ * @param {string} filePath Đường dẫn đến file video.
+ * @returns {Promise<number>} Thời lượng video tính bằng giây.
+ */
+export async function getVideoDurationInSeconds(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        return reject(
+          new Error(
+            `Lỗi khi lấy thông tin video (ffprobe) từ ${filePath}: ${err.message}. Đảm bảo ffmpeg đã được cài đặt và trong PATH.`
+          )
+        );
+      }
+      if (metadata && metadata.format && metadata.format.duration) {
+        resolve(parseFloat(metadata.format.duration));
+      } else {
+        reject(
+          new Error(
+            `Không tìm thấy thông tin thời lượng trong metadata video cho file ${filePath}.`
+          )
+        );
+      }
+    });
+  });
+}
 
-const router = express.Router();
+/**
+ * Tạo thumbnail từ video file tại một thời điểm cụ thể.
+ * @param {string} videoFilePath Đường dẫn đến file video.
+ * @param {string} outputFileName Tên file cho thumbnail (ví dụ: thumb.png).
+ * @param {string | number} timestamp Thời điểm để chụp thumbnail (ví dụ: '00:00:01' hoặc 1 (giây)).
+ * @returns {Promise<Buffer>} Buffer của file thumbnail.
+ */
+export async function generateThumbnailFromVideo(
+  videoFilePath,
+  outputFileName, // Sẽ được lưu vào os.tmpdir()
+  timestamp
+) {
+  return new Promise((resolve, reject) => {
+    const tempThumbPath = path.join(os.tmpdir(), outputFileName); // Đường dẫn đầy đủ cho thumbnail tạm
 
-// Endpoint cho media server gửi sự kiện stream
-// Ví dụ: POST /api/webhook/stream-event
-router.post(
-  "/stream-event/:webhookToken",
-  verifyWebhookTokenInParam,
-  handleStreamEvent
-);
+    ffmpeg(videoFilePath)
+      .on("error", (err) => {
+        reject(
+          new Error(
+            `Lỗi ffmpeg khi tạo thumbnail từ ${videoFilePath}: ${err.message}`
+          )
+        );
+      })
+      .on("end", () => {
+        fs.readFile(tempThumbPath, (readErr, thumbBuffer) => {
+          // Xóa file thumbnail tạm sau khi đã đọc vào buffer
+          fs.unlink(tempThumbPath, (unlinkErr) => {
+            if (unlinkErr) {
+              console.error(
+                `Lỗi khi xóa file thumbnail tạm ${tempThumbPath}:`,
+                unlinkErr
+              );
+            }
+          });
+          if (readErr) {
+            return reject(
+              new Error(
+                `Không thể đọc file thumbnail tạm ${tempThumbPath}: ${readErr.message}`
+              )
+            );
+          }
+          resolve(thumbBuffer);
+        });
+      })
+      .screenshots({
+        timestamps: [timestamp],
+        filename: outputFileName, // ffmpeg sẽ lưu file này vào folder chỉ định bên dưới
+        folder: os.tmpdir(), // Thư mục để ffmpeg lưu thumbnail tạm thời
+        size: "320x240", // Kích thước thumbnail, có thể tùy chỉnh
+      });
+  });
+}
+```
 
-// Endpoint cho Nginx thông báo khi đã ghi hình xong file VOD
-// Ví dụ: POST /api/webhook/record-done/:webhookToken
-router.post(
-  "/record-done/:webhookToken",
-  verifyWebhookTokenInParam,
-  handleStreamRecordDone
-);
+## File: src/validators/vodValidator.js
+```javascript
+import { body, param } from "express-validator";
 
-export default router;
+// Validator cho việc tạo/upload VOD thủ công bởi admin
+const manualUploadVOD = [
+  body("title")
+    .trim()
+    .notEmpty()
+    .withMessage("Tiêu đề VOD không được để trống.")
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 5000 })
+    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+
+  // Các trường này là bắt buộc khi upload thủ công VOD đã có trên B2
+  body("videoUrl")
+    .trim()
+    .notEmpty()
+    .withMessage("videoUrl (pre-signed URL từ B2) không được để trống.")
+    .isURL()
+    .withMessage("videoUrl phải là một URL hợp lệ."),
+  body("urlExpiresAt")
+    .notEmpty()
+    .withMessage(
+      "urlExpiresAt (thời điểm hết hạn của videoUrl) không được để trống."
+    )
+    .isISO8601()
+    .withMessage("urlExpiresAt phải là một ngày hợp lệ theo định dạng ISO8601.")
+    .toDate(), // Chuyển đổi thành Date object
+  body("b2FileId")
+    .trim()
+    .notEmpty()
+    .withMessage("b2FileId (ID file trên B2) không được để trống."),
+  body("b2FileName")
+    .trim()
+    .notEmpty()
+    .withMessage("b2FileName (tên file trên B2) không được để trống."),
+  body("durationSeconds")
+    .notEmpty()
+    .withMessage(
+      "durationSeconds (thời lượng video tính bằng giây) không được để trống."
+    )
+    .isInt({ gt: 0 })
+    .withMessage("durationSeconds phải là một số nguyên dương.")
+    .toInt(),
+
+  // Các trường tùy chọn
+  body("streamId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("streamId (nếu có) phải là một số nguyên dương.")
+    .toInt(),
+  body("streamKey")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("streamKey (nếu có) không được để trống."),
+  body("thumbnail")
+    .optional()
+    .trim()
+    .isURL()
+    .withMessage("Thumbnail (nếu có) phải là một URL hợp lệ."),
+  // userId sẽ được lấy từ token xác thực, không cần validate ở đây
+];
+
+// Validator cho việc upload VOD từ file local
+const uploadLocalVOD = [
+  body("title")
+    .trim()
+    .notEmpty()
+    .withMessage("Tiêu đề VOD không được để trống.")
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 5000 })
+    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+  // Các trường tùy chọn khác có thể thêm sau nếu cần
+  // File video sẽ được xử lý bởi multer, không cần validate ở đây
+  // streamId, streamKey, userId sẽ được xử lý trong controller
+];
+
+export const vodValidationRules = {
+  manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
+  uploadLocalVOD,
+};
 ```
 
 ## File: models/index.js
@@ -2867,6 +1808,314 @@ db.Sequelize = Sequelize;
 module.exports = db;
 ```
 
+## File: src/lib/b2.service.js
+```javascript
+import B2 from "backblaze-b2";
+import uploadAnyExtension from "@gideo-llc/backblaze-b2-upload-any"; // Import extension
+import fs from "fs/promises";
+import path from "path";
+import dotenv from "dotenv";
+
+dotenv.config(); // Load environment variables from .env file
+
+// Install the uploadAny extension (Intrusive way)
+uploadAnyExtension.install(B2);
+
+// Load configuration from environment variables
+const APPLICATION_KEY_ID = process.env.B2_APPLICATION_KEY_ID;
+const APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
+const BUCKET_ID = process.env.B2_BUCKET_ID;
+const BUCKET_NAME = process.env.B2_BUCKET_NAME;
+// B2_DOWNLOAD_HOST is used if constructing URLs manually,
+// but b2.authorize() provides the most accurate downloadUrl (account's base download URL)
+
+if (!APPLICATION_KEY_ID || !APPLICATION_KEY || !BUCKET_ID || !BUCKET_NAME) {
+  console.error(
+    "Missing Backblaze B2 environment variables. Please check your .env file."
+  );
+  // Optionally, throw an error or exit if configuration is critical
+  // process.exit(1);
+}
+
+const b2 = new B2({
+  applicationKeyId: APPLICATION_KEY_ID,
+  applicationKey: APPLICATION_KEY,
+});
+
+/**
+ * Authorizes with B2. This should be called before any B2 operations.
+ * Returns the authorization data including the downloadUrl.
+ * @returns {Promise<object>} Authorization data from B2, including downloadUrl.
+ */
+async function authorizeB2() {
+  try {
+    // The intrusive install wraps authorize, so this call is important.
+    const authData = await b2.authorize();
+    return authData.data;
+  } catch (error) {
+    console.error("Error authorizing with Backblaze B2:", error);
+    throw error;
+  }
+}
+
+/**
+ * Uploads a video file (and optionally a thumbnail) stream to Backblaze B2
+ * using @gideo-llc/backblaze-b2-upload-any extension
+ * and generates pre-signed URLs for private access.
+ * @param {import('stream').Readable} videoStream - The readable stream of the video file.
+ * @param {number} videoSize - The size of the video file in bytes (may not be strictly needed by uploadAny but good for context).
+ * @param {string} videoFileNameInB2 - The desired file name for the video in B2.
+ * @param {string} videoMimeType - The MIME type of the video file.
+ * @param {import('stream').Readable} [thumbnailStream] - Optional readable stream of the thumbnail file.
+ * @param {number} [thumbnailSize] - Optional size of the thumbnail file in bytes (may not be strictly needed by uploadAny).
+ * @param {string} [thumbnailFileNameInB2] - Optional desired file name for the thumbnail in B2.
+ * @param {string} [thumbnailMimeType] - Optional MIME type of the thumbnail file.
+ * @param {number} [durationSeconds=0] - Duration of the video in seconds.
+ * @param {number} [presignedUrlDurationSecs=parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 25200] - Duration for pre-signed URLs.
+ * @returns {Promise<object>} - An object containing B2 file info and pre-signed URLs for video and thumbnail.
+ */
+async function uploadToB2AndGetPresignedUrl(
+  videoStream,
+  videoSize, // Kept for context, uploadAny might not directly use it for streams
+  videoFileNameInB2,
+  videoMimeType,
+  thumbnailStream,
+  thumbnailSize, // Kept for context
+  thumbnailFileNameInB2,
+  thumbnailMimeType,
+  durationSeconds = 0,
+  presignedUrlDurationSecs = parseInt(
+    process.env.B2_PRESIGNED_URL_DURATION_SECONDS
+  ) || 25200
+) {
+  try {
+    const authData = await authorizeB2(); // Ensures b2 instance is authorized and extension has run its authorization wrapper
+    const accountDownloadUrl = authData.downloadUrl;
+
+    // --- Upload Video using uploadAny ---
+    console.log(
+      `Uploading video stream ${videoFileNameInB2} using uploadAny...`
+    );
+    const uploadedVideoResponse = await b2.uploadAny({
+      bucketId: BUCKET_ID,
+      fileName: videoFileNameInB2,
+      data: videoStream,
+      contentType: videoMimeType,
+      // partSize will be automatically set if using intrusive install, otherwise: authData.recommendedPartSize
+      // Other options like concurrency can be added here if needed
+    });
+    // Assuming response structure is similar to b2.uploadFile(), providing .data.fileId and .data.fileName
+    // If @gideo-llc/backblaze-b2-upload-any returns the raw b2_upload_file response, it might be directly uploadedVideoResponse.fileId
+    // Let's assume it's nested under .data for now, adjust if logs show otherwise.
+    const videoB2FileId =
+      uploadedVideoResponse.fileId || uploadedVideoResponse.data?.fileId;
+    const videoB2FileName =
+      uploadedVideoResponse.fileName || uploadedVideoResponse.data?.fileName;
+
+    if (!videoB2FileId || !videoB2FileName) {
+      console.error(
+        "uploadAny video response missing fileId or fileName:",
+        uploadedVideoResponse
+      );
+      throw new Error(
+        "Failed to get fileId or fileName from B2 uploadAny video response."
+      );
+    }
+    console.log(
+      `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2 via uploadAny.`
+    );
+
+    // --- Generate Pre-signed URL for Video ---
+    const { data: videoDownloadAuth } = await b2.getDownloadAuthorization({
+      bucketId: BUCKET_ID,
+      fileNamePrefix: videoB2FileName,
+      validDurationInSeconds: presignedUrlDurationSecs,
+    });
+    const videoViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${videoB2FileName}?Authorization=${videoDownloadAuth.authorizationToken}`;
+    const videoUrlExpiresAt = new Date(
+      Date.now() + presignedUrlDurationSecs * 1000
+    );
+
+    let thumbnailB2FileId = null;
+    let thumbnailB2FileName = null;
+    let thumbnailViewableUrl = null;
+    let thumbnailUrlExpiresAt = null;
+
+    // --- Upload Thumbnail using uploadAny (if provided) ---
+    if (
+      thumbnailStream &&
+      thumbnailFileNameInB2 &&
+      thumbnailMimeType &&
+      thumbnailSize > 0 // Keep size check logic as a basic validation
+    ) {
+      console.log(
+        `Uploading thumbnail stream ${thumbnailFileNameInB2} using uploadAny...`
+      );
+      const uploadedThumbResponse = await b2.uploadAny({
+        bucketId: BUCKET_ID,
+        fileName: thumbnailFileNameInB2,
+        data: thumbnailStream,
+        contentType: thumbnailMimeType,
+      });
+      thumbnailB2FileId =
+        uploadedThumbResponse.fileId || uploadedThumbResponse.data?.fileId;
+      thumbnailB2FileName =
+        uploadedThumbResponse.fileName || uploadedThumbResponse.data?.fileName;
+
+      if (!thumbnailB2FileId || !thumbnailB2FileName) {
+        console.error(
+          "uploadAny thumbnail response missing fileId or fileName:",
+          uploadedThumbResponse
+        );
+        throw new Error(
+          "Failed to get fileId or fileName from B2 uploadAny thumbnail response."
+        );
+      }
+      console.log(
+        `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2 via uploadAny.`
+      );
+
+      // --- Generate Pre-signed URL for Thumbnail ---
+      const { data: thumbDownloadAuth } = await b2.getDownloadAuthorization({
+        bucketId: BUCKET_ID,
+        fileNamePrefix: thumbnailB2FileName,
+        validDurationInSeconds: presignedUrlDurationSecs,
+      });
+      thumbnailViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${thumbnailB2FileName}?Authorization=${thumbDownloadAuth.authorizationToken}`;
+      thumbnailUrlExpiresAt = new Date(
+        Date.now() + presignedUrlDurationSecs * 1000
+      );
+    }
+
+    return {
+      video: {
+        b2FileId: videoB2FileId,
+        b2FileName: videoB2FileName,
+        url: videoViewableUrl,
+        urlExpiresAt: videoUrlExpiresAt,
+        mimeType: videoMimeType,
+        durationSeconds: durationSeconds, // Trả về duration đã nhận
+      },
+      thumbnail: thumbnailB2FileId
+        ? {
+            b2FileId: thumbnailB2FileId,
+            b2FileName: thumbnailB2FileName,
+            url: thumbnailViewableUrl,
+            urlExpiresAt: thumbnailUrlExpiresAt,
+            mimeType: thumbnailMimeType,
+          }
+        : null,
+      message: "Files uploaded successfully and pre-signed URLs generated.",
+    };
+  } catch (error) {
+    console.error(
+      `Error in B2 service for video ${videoFileNameInB2}:`,
+      error.message
+    );
+    if (error.isAxiosError && error.response && error.response.data) {
+      console.error("B2 API Error Details:", error.response.data);
+    }
+    // Gắn thêm thông tin để controller có thể cố gắng dọn dẹp
+    let errorToThrow = new Error(`B2 service error: ${error.message}`);
+    if (error.b2FileIdToDelete)
+      errorToThrow.b2FileIdToDelete = error.b2FileIdToDelete;
+    if (error.b2FileNameToDelete)
+      errorToThrow.b2FileNameToDelete = error.b2FileNameToDelete;
+    throw errorToThrow;
+  }
+}
+
+/**
+ * Generates a new pre-signed URL for an existing private file in B2.
+ * @param {string} b2FileName - The name of the file in B2 (e.g., vods/streamkey-timestamp.flv).
+ * @param {number} [presignedUrlDuration=3600] - Duration in seconds for which the new URL is valid.
+ * @returns {Promise<string>} - The new pre-signed URL.
+ */
+async function generatePresignedUrlForExistingFile(
+  b2FileName,
+  presignedUrlDuration = 3600
+) {
+  try {
+    const authData = await authorizeB2();
+    const accountDownloadUrl = authData.downloadUrl;
+
+    const {
+      data: { authorizationToken: newDownloadAuthToken },
+    } = await b2.getDownloadAuthorization({
+      bucketId: BUCKET_ID,
+      fileNamePrefix: b2FileName,
+      validDurationInSeconds: presignedUrlDuration,
+    });
+
+    const newViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${newDownloadAuthToken}`;
+
+    console.log(
+      `Generated new pre-signed URL for ${b2FileName} (valid for ${presignedUrlDuration}s): ${newViewableUrl}`
+    );
+    return newViewableUrl;
+  } catch (error) {
+    console.error(
+      `Error generating new pre-signed URL for ${b2FileName}:`,
+      error.message
+    );
+    if (error.isAxiosError && error.response && error.response.data) {
+      console.error("B2 API Error Details:", error.response.data);
+    }
+    throw new Error(
+      `Failed to generate new pre-signed URL for ${b2FileName}: ${error.message}`
+    );
+  }
+}
+
+/**
+ * Deletes a file from Backblaze B2.
+ * @param {string} fileName - The name of the file in B2.
+ * @param {string} fileId - The ID of the file in B2.
+ * @returns {Promise<object>} - Confirmation from B2.
+ */
+async function deleteFileFromB2(fileName, fileId) {
+  try {
+    await authorizeB2(); // Ensure we are authorized
+
+    console.log(
+      `Attempting to delete file ${fileName} (ID: ${fileId}) from B2.`
+    );
+
+    const response = await b2.deleteFileVersion({
+      fileName: fileName,
+      fileId: fileId,
+    });
+
+    console.log(
+      `File ${fileName} (ID: ${fileId}) deleted successfully from B2.`
+    );
+    return response.data;
+  } catch (error) {
+    console.error(
+      `Error deleting file ${fileName} (ID: ${fileId}) from B2:`,
+      error.message
+    );
+    if (error.isAxiosError && error.response && error.response.data) {
+      console.error("B2 API Error Details for delete:", error.response.data);
+    }
+    // Decide if you want to throw an error that stops the VOD deletion process
+    // or just log it and proceed with DB deletion.
+    // For now, let's throw to indicate B2 deletion failure.
+    throw new Error(
+      `Failed to delete file ${fileName} from B2: ${error.message}`
+    );
+  }
+}
+
+// Export the main function to be used by other services
+export {
+  uploadToB2AndGetPresignedUrl,
+  authorizeB2,
+  generatePresignedUrlForExistingFile,
+  deleteFileFromB2,
+};
+```
+
 ## File: src/middlewares/authMiddleware.js
 ```javascript
 import jwt from "jsonwebtoken";
@@ -2956,6 +2205,37 @@ export function verifyWebhookTokenInParam(req, res, next) {
     return res.status(403).json({ message: "Invalid webhook token." });
   }
 }
+```
+
+## File: src/routes/webhookRoutes.js
+```javascript
+import express from "express";
+import {
+  handleStreamEvent,
+  handleStreamRecordDone,
+} from "../controllers/webhookController.js";
+
+import { verifyWebhookTokenInParam } from "../middlewares/authMiddleware.js";
+
+const router = express.Router();
+
+// Endpoint cho media server gửi sự kiện stream
+// Ví dụ: POST /api/webhook/stream-event
+router.post(
+  "/stream-event/:webhookToken",
+  verifyWebhookTokenInParam,
+  handleStreamEvent
+);
+
+// Endpoint cho Nginx thông báo khi đã ghi hình xong file VOD
+// Ví dụ: POST /api/webhook/record-done/:webhookToken
+router.post(
+  "/record-done/:webhookToken",
+  verifyWebhookTokenInParam,
+  handleStreamRecordDone
+);
+
+export default router;
 ```
 
 ## File: src/services/streamService.js
@@ -3216,6 +2496,1433 @@ export const loginUser = async (username, password) => {
   } catch (error) {
     throw new Error("Error logging in: " + error.message);
   }
+};
+```
+
+## File: src/controllers/vodController.js
+```javascript
+import { vodService } from "../services/vodService.js";
+import { AppError } from "../utils/errorHandler.js";
+import { matchedData, validationResult } from "express-validator"; // Sử dụng express-validator để validate
+import {
+  uploadToB2AndGetPresignedUrl,
+  generatePresignedUrlForExistingFile,
+  deleteFileFromB2,
+} from "../lib/b2.service.js"; // Thêm import B2 service
+import {
+  getVideoDurationInSeconds,
+  generateThumbnailFromVideo,
+} from "../utils/videoUtils.js"; // Thêm generateThumbnailFromVideo
+import path from "path";
+import fs from "fs/promises"; // Thêm fs để xóa file tạm
+
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+/**
+ * @route   POST /api/vod/upload
+ * @desc    (Admin/Manual Upload) Tạo một VOD mới. Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
+ *          Endpoint này dành cho trường hợp upload thủ công, không qua luồng Nginx webhook.
+ * @access  Private (Admin)
+ */
+const uploadVOD = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id; // req.user được gán bởi authMiddleware
+
+    if (!userId) {
+      // Hoặc kiểm tra role admin ở đây nếu endpoint này chỉ cho admin
+      throw new AppError(
+        "Xác thực thất bại hoặc userId không được cung cấp.",
+        401
+      );
+    }
+
+    // Dữ liệu cần thiết cho upload thủ công:
+    const {
+      streamId, // Tùy chọn, nhưng nên có nếu liên kết với stream cũ
+      streamKey, // Tùy chọn
+      title,
+      description,
+      videoUrl, // Pre-signed URL đã có
+      urlExpiresAt, // Thời điểm URL hết hạn
+      b2FileId, // ID file trên B2
+      b2FileName, // Tên file trên B2
+      thumbnail, // URL thumbnail (có thể cũng là pre-signed)
+      durationSeconds, // Thời lượng video
+    } = validatedData;
+
+    // Service createVOD đã được cập nhật để xử lý các trường này
+    const newVOD = await vodService.createVOD({
+      userId,
+      streamId,
+      streamKey,
+      title,
+      description,
+      videoUrl,
+      urlExpiresAt: new Date(urlExpiresAt), // Chuyển đổi sang Date object nếu cần
+      b2FileId,
+      b2FileName,
+      thumbnail,
+      durationSeconds,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "VOD đã được tạo thành công (thủ công).",
+      data: newVOD,
+    });
+  } catch (error) {
+    next(error); // Chuyển lỗi cho error handling middleware
+  }
+};
+
+/**
+ * @route   GET /api/vod
+ * @desc    Lấy danh sách VOD, hỗ trợ filter và phân trang.
+ * @access  Public (hoặc Private tùy theo yêu cầu)
+ */
+const getAllVODs = async (req, res, next) => {
+  try {
+    // Lấy các query params cho filter và pagination
+    const {
+      streamId,
+      userId,
+      streamKey,
+      page,
+      limit,
+      sortBy = "createdAt", // Mặc định sắp xếp theo ngày tạo
+      sortOrder = "DESC", // Mặc định giảm dần
+    } = req.query;
+
+    const options = {
+      streamId: streamId ? parseInt(streamId) : undefined,
+      userId: userId ? parseInt(userId) : undefined,
+      streamKey: streamKey ? String(streamKey) : undefined,
+      page: page ? parseInt(page) : 1,
+      limit: limit ? parseInt(limit) : 10,
+      sortBy: String(sortBy),
+      sortOrder: String(sortOrder).toUpperCase() === "ASC" ? "ASC" : "DESC",
+    };
+
+    const result = await vodService.getVODs(options);
+
+    res.status(200).json({
+      success: true,
+      data: result.vods, // Service đã trả về các trường cần thiết, bao gồm urlExpiresAt
+      pagination: {
+        totalItems: result.totalItems,
+        totalPages: result.totalPages,
+        currentPage: result.currentPage,
+        limit: options.limit,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   GET /api/vod/:id
+ * @desc    Lấy chi tiết một VOD bằng ID. Pre-signed URL sẽ được tự động làm mới nếu cần.
+ * @access  Public (hoặc Private tùy theo yêu cầu)
+ */
+const getVODDetails = async (req, res, next) => {
+  try {
+    const vodId = parseInt(req.params.id);
+    if (isNaN(vodId)) {
+      throw new AppError("ID VOD không hợp lệ.", 400);
+    }
+
+    // vodService.getVODById sẽ tự động refresh URL nếu cần
+    const vod = await vodService.getVODById(vodId);
+
+    res.status(200).json({
+      success: true,
+      data: vod, // Đã bao gồm videoUrl và urlExpiresAt được cập nhật nếu cần
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   DELETE /api/vod/:id
+ * @desc    Xóa một VOD (yêu cầu quyền chủ sở hữu hoặc admin).
+ *          Sẽ xóa cả file trên B2.
+ * @access  Private
+ */
+const removeVOD = async (req, res, next) => {
+  try {
+    const vodId = parseInt(req.params.id);
+    if (isNaN(vodId)) {
+      throw new AppError("ID VOD không hợp lệ.", 400);
+    }
+
+    const requestingUserId = req.user?.id;
+    const isAdmin = req.user?.role === "admin"; // Giả sử có trường role trong req.user
+
+    if (!requestingUserId) {
+      throw new AppError("Xác thực thất bại, không tìm thấy người dùng.", 401);
+    }
+
+    // vodService.deleteVOD sẽ xử lý cả việc xóa file trên B2
+    await vodService.deleteVOD(vodId, requestingUserId, isAdmin);
+
+    res.status(200).json({
+      success: true,
+      message: "VOD đã được xóa thành công.",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   POST /api/vod/:id/refresh-url
+ * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
+ * @access  Private
+ */
+const refreshVODSignedUrl = async (req, res, next) => {
+  try {
+    const vodId = parseInt(req.params.id);
+    if (isNaN(vodId)) {
+      throw new AppError("ID VOD không hợp lệ.", 400);
+    }
+
+    const requestingUserId = req.user?.id;
+    const isAdmin = req.user?.role === "admin";
+
+    if (!requestingUserId) {
+      throw new AppError("Xác thực thất bại.", 401);
+    }
+
+    // Kiểm tra quyền: Chỉ admin hoặc chủ sở hữu VOD mới được refresh (tùy chọn)
+    // Hoặc chỉ cần user đã đăng nhập là đủ nếu không quá khắt khe
+    // const vod = await vodService.getVODById(vodId); // Lấy VOD để check owner nếu cần (getVODById có thể refresh rồi)
+    // if (!isAdmin && vod.userId !== requestingUserId) {
+    //     throw new AppError("Bạn không có quyền làm mới URL cho VOD này.", 403);
+    // }
+
+    const refreshedInfo = await vodService.refreshVODUrl(vodId);
+
+    res.status(200).json({
+      success: true,
+      message: "Pre-signed URL cho VOD đã được làm mới thành công.",
+      data: refreshedInfo, // Gồm id, videoUrl, urlExpiresAt mới
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   POST /api/vod/upload-local
+ * @desc    Tạo VOD mới bằng cách upload file từ máy người dùng.
+ * @access  Private (Yêu cầu xác thực)
+ */
+const uploadLocalVODFile = async (req, res, next) => {
+  let videoFilePathTemp = null; // Để lưu đường dẫn file tạm cho việc xóa
+  let thumbnailFilePathTemp = null;
+
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id;
+
+    if (!userId) {
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    if (!req.files || !req.files.videoFile || !req.files.videoFile[0]) {
+      throw new AppError(
+        "Không có file video nào (videoFile) được tải lên.",
+        400
+      );
+    }
+
+    const { title, description } = validatedData;
+    const videoFile = req.files.videoFile[0];
+    videoFilePathTemp = videoFile.path; // Lưu đường dẫn file video tạm
+
+    let thumbnailFilePath = null; // Sẽ truyền vào service
+    let originalThumbnailFileName = null;
+    let thumbnailMimeType = null;
+
+    if (req.files.thumbnailFile && req.files.thumbnailFile[0]) {
+      const thumbnailFile = req.files.thumbnailFile[0];
+      thumbnailFilePathTemp = thumbnailFile.path; // Lưu đường dẫn file thumbnail tạm
+      thumbnailFilePath = thumbnailFile.path; // Gán cho biến sẽ truyền đi
+      originalThumbnailFileName = thumbnailFile.originalname;
+      thumbnailMimeType = thumbnailFile.mimetype;
+      logger.info(
+        "Controller: Thumbnail được cung cấp bởi người dùng từ file tạm."
+      );
+    }
+
+    const servicePayload = {
+      userId,
+      title,
+      description,
+      videoFilePath: videoFile.path, // Truyền đường dẫn file video
+      originalVideoFileName: videoFile.originalname,
+      videoMimeType: videoFile.mimetype,
+      thumbnailFilePath, // Truyền đường dẫn file thumbnail (có thể là null)
+      originalThumbnailFileName, // có thể là null
+      thumbnailMimeType, // có thể là null
+    };
+
+    logger.info("Controller: Gọi vodService.createVODFromUpload với payload:", {
+      userId: servicePayload.userId,
+      title: servicePayload.title,
+      originalVideoFileName: servicePayload.originalVideoFileName,
+      videoFilePath: servicePayload.videoFilePath,
+      hasUserThumbnail: !!servicePayload.thumbnailFilePath,
+    });
+
+    const newVOD = await vodService.createVODFromUpload(servicePayload);
+
+    res.status(201).json({
+      success: true,
+      message: "VOD đã được upload và tạo thành công.",
+      data: newVOD,
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi upload VOD từ local:", error);
+    next(error);
+  } finally {
+    // Xóa file tạm sau khi xử lý
+    if (videoFilePathTemp) {
+      try {
+        await fs.unlink(videoFilePathTemp);
+        logger.info(`Controller: Đã xóa file video tạm: ${videoFilePathTemp}`);
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file video tạm ${videoFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+  }
+};
+
+export const vodController = {
+  uploadVOD,
+  uploadLocalVODFile,
+  getAllVODs,
+  getVODDetails,
+  removeVOD,
+  refreshVODSignedUrl,
+};
+```
+
+## File: src/models/vod.js
+```javascript
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
+
+const VOD = sequelize.define(
+  "VOD",
+  {
+    id: {
+      allowNull: false,
+      autoIncrement: true,
+      primaryKey: true,
+      type: DataTypes.INTEGER,
+    },
+    streamId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "Streams",
+        key: "id",
+      },
+    },
+    streamKey: {
+      // Thêm streamKey để dễ dàng liên kết với thông tin từ Nginx webhook
+      type: DataTypes.STRING,
+      allowNull: true, // Hoặc false nếu bạn luôn có và yêu cầu streamKey
+      // unique: true, // Cân nhắc nếu streamKey phải là duy nhất
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users",
+        key: "id",
+      },
+    },
+    title: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    description: {
+      type: DataTypes.TEXT,
+    },
+    videoUrl: {
+      // Sẽ lưu pre-signed URL
+      type: DataTypes.TEXT, // Pre-signed URLs có thể dài
+      allowNull: false,
+    },
+    urlExpiresAt: {
+      // Thời điểm pre-signed URL hết hạn
+      type: DataTypes.DATE,
+      allowNull: false,
+    },
+    b2FileId: {
+      // ID file trên B2
+      type: DataTypes.STRING,
+      allowNull: true, // Hoặc false nếu đây là thông tin bắt buộc sau khi upload
+    },
+    b2FileName: {
+      // Tên file trên B2
+      type: DataTypes.STRING,
+      allowNull: true, // Hoặc false
+    },
+    thumbnailUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    thumbnailUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    b2ThumbnailFileId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    b2ThumbnailFileName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    durationSeconds: {
+      // Đổi tên từ duration để rõ ràng hơn là giây
+      type: DataTypes.FLOAT, // Đơn vị: giây (thay đổi từ INTEGER sang FLOAT)
+    },
+    // createdAt và updatedAt được Sequelize quản lý tự động nếu timestamps: true
+  },
+  {
+    modelName: "VOD",
+    timestamps: true,
+    // tableName: 'VODs'
+  }
+);
+
+export default VOD;
+```
+
+## File: src/routes/vodRoutes.js
+```javascript
+import express from "express";
+import { vodController } from "../controllers/vodController.js";
+import authenticateToken from "../middlewares/authMiddleware.js"; // Đổi tên import cho đúng với file export
+import { vodValidationRules } from "../validators/vodValidator.js";
+import upload from "../middlewares/uploadMiddleware.js"; // Import middleware upload
+// import upload from '../middlewares/uploadMiddleware.js'; // Tùy chọn: Middleware cho upload file (ví dụ: multer)
+
+const router = express.Router();
+
+/**
+ * @route   POST /api/vod/upload
+ * @desc    (Admin/Manual Upload) Tạo một VOD mới.
+ *          Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
+ * @access  Private (Admin - yêu cầu xác thực)
+ */
+router.post(
+  "/upload",
+  authenticateToken, // Sử dụng tên middleware đã import chính xác
+  // upload.single('videoFile'), // Ví dụ: nếu client upload file video tên là 'videoFile'
+  vodValidationRules.manualUploadVOD, // Sử dụng validator mới cho manual upload
+  vodController.uploadVOD
+);
+
+/**
+ * @route   POST /api/vod/upload-local
+ * @desc    Tạo VOD mới bằng cách upload file video từ máy tính người dùng.
+ * @access  Private (Yêu cầu xác thực)
+ */
+router.post(
+  "/upload-local",
+  authenticateToken,
+  upload.fields([
+    { name: "videoFile", maxCount: 1 },
+    { name: "thumbnailFile", maxCount: 1 }, // thumbnailFile là tùy chọn
+  ]),
+  vodValidationRules.uploadLocalVOD, // Validator cho các trường text (title, description)
+  vodController.uploadLocalVODFile
+);
+
+/**
+ * @route   GET /api/vod
+ * @desc    Lấy danh sách VOD.
+ * @access  Public (hoặc authMiddleware nếu cần Private)
+ */
+router.get(
+  "/",
+  // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
+  vodController.getAllVODs
+);
+
+/**
+ * @route   GET /api/vod/:id
+ * @desc    Lấy chi tiết một VOD.
+ * @access  Public (hoặc authMiddleware nếu cần Private)
+ */
+router.get(
+  "/:id",
+  // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
+  vodController.getVODDetails
+);
+
+/**
+ * @route   DELETE /api/vod/:id
+ * @desc    Xóa một VOD.
+ * @access  Private (chỉ chủ sở hữu hoặc admin)
+ */
+router.delete(
+  "/:id",
+  authenticateToken, // Yêu cầu xác thực
+  vodController.removeVOD
+);
+
+/**
+ * @route   POST /api/vod/:id/refresh-url
+ * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
+ * @access  Private (yêu cầu xác thực)
+ */
+router.post(
+  "/:id/refresh-url",
+  authenticateToken, // Yêu cầu xác thực
+  vodController.refreshVODSignedUrl
+);
+
+export default router;
+```
+
+## File: src/services/vodService.js
+```javascript
+import { VOD, User, Stream } from "../models/index.js";
+import { AppError, handleServiceError } from "../utils/errorHandler.js";
+import {
+  uploadToB2AndGetPresignedUrl,
+  deleteFileFromB2,
+  generatePresignedUrlForExistingFile,
+} from "../lib/b2.service.js";
+import {
+  getVideoDurationInSeconds,
+  generateThumbnailFromVideo,
+} from "../utils/videoUtils.js";
+import fs from "fs/promises";
+import fsSync from "fs";
+import path from "path";
+import { spawn } from "child_process";
+import dotenv from "dotenv";
+import { Readable } from "stream";
+
+dotenv.config();
+
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+// Helper function to format duration for FFmpeg timestamp
+const formatDurationForFFmpeg = (totalSecondsParam) => {
+  let totalSeconds = totalSecondsParam;
+  if (totalSeconds < 0) totalSeconds = 0; // Ensure non-negative
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  // Ensure milliseconds are calculated from the fractional part of totalSeconds
+  const milliseconds = Math.floor(
+    (totalSeconds - Math.floor(totalSeconds)) * 1000
+  );
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(seconds).padStart(3, "0")}.${String(milliseconds).padStart(
+    3,
+    "0"
+  )}`;
+};
+
+// Helper function to run FFmpeg/FFprobe commands
+const runFFCommand = (command, args) => {
+  return new Promise((resolve, reject) => {
+    const process = spawn(command, args);
+    let output = "";
+    let errorOutput = "";
+
+    process.stdout.on("data", (data) => {
+      output += data.toString();
+    });
+
+    process.stderr.on("data", (data) => {
+      errorOutput += data.toString();
+    });
+
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve(output);
+      } else {
+        reject(
+          new AppError(
+            `FFmpeg/FFprobe command '${command} ${args.join(
+              " "
+            )}' failed with code ${code}: ${errorOutput}`,
+            500
+          )
+        );
+      }
+    });
+
+    process.on("error", (err) => {
+      reject(
+        new AppError(
+          `Failed to start FFmpeg/FFprobe command '${command}': ${err.message}`,
+          500
+        )
+      );
+    });
+  });
+};
+
+// Helper function to get video duration using ffprobe
+const getVideoDuration = async (filePath) => {
+  try {
+    const args = [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ];
+    const durationStr = await runFFCommand("ffprobe", args);
+    const duration = parseFloat(durationStr);
+    if (isNaN(duration)) {
+      throw new AppError("Could not parse video duration from ffprobe.", 500);
+    }
+    return Math.round(duration); // Trả về giây, làm tròn
+  } catch (error) {
+    logger.error(`Error getting video duration for ${filePath}:`, error);
+    throw error; // Re-throw để hàm gọi xử lý
+  }
+};
+
+// Helper function to convert FLV to MP4
+const convertFlvToMp4 = async (flvPath, mp4Path) => {
+  try {
+    // -y: overwrite output files without asking
+    // -c:v copy -c:a copy: try to copy codecs first, faster if compatible
+    // if not compatible, ffmpeg will transcode. Add specific codec options if needed.
+    const args = ["-i", flvPath, "-c:v", "copy", "-c:a", "aac", "-y", mp4Path];
+    // Using more robust conversion:
+    // const args = ['-i', flvPath, '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-y', mp4Path];
+    logger.info(`Converting ${flvPath} to ${mp4Path}...`);
+    await runFFCommand("ffmpeg", args);
+    logger.info(`Converted ${flvPath} to ${mp4Path} successfully.`);
+    return mp4Path;
+  } catch (error) {
+    logger.error(`Error converting FLV to MP4 for ${flvPath}:`, error);
+    // Fallback or specific error handling can be added here
+    if (error.message.includes("failed with code 1")) {
+      // Common error if codecs are incompatible for direct copy. Try transcoding.
+      logger.warn("Initial conversion failed, trying with re-encoding...");
+      const transcodeArgs = [
+        "-i",
+        flvPath,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        "-y",
+        mp4Path,
+      ];
+      try {
+        await runFFCommand("ffmpeg", transcodeArgs);
+        logger.info(`Re-encoded ${flvPath} to ${mp4Path} successfully.`);
+        return mp4Path;
+      } catch (transcodeError) {
+        logger.error(`Re-encoding also failed for ${flvPath}:`, transcodeError);
+        throw transcodeError;
+      }
+    }
+    throw error;
+  }
+};
+
+// Helper function to extract thumbnail
+const extractThumbnail = async (
+  videoPath,
+  thumbnailPath,
+  timestamp = "00:00:05.000"
+) => {
+  try {
+    const args = [
+      "-i",
+      videoPath,
+      "-ss",
+      timestamp, // Seek to 5 seconds
+      "-vframes",
+      "1", // Extract one frame
+      "-vf",
+      "scale=640:-1", // Scale width to 640px, height auto
+      "-y", // Overwrite if exists
+      thumbnailPath,
+    ];
+    logger.info(
+      `Extracting thumbnail from ${videoPath} to ${thumbnailPath}...`
+    );
+    await runFFCommand("ffmpeg", args);
+    logger.info(`Extracted thumbnail to ${thumbnailPath} successfully.`);
+    return thumbnailPath;
+  } catch (error) {
+    logger.error(`Error extracting thumbnail from ${videoPath}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Xử lý file video đã ghi (FLV), chuyển đổi sang MP4, upload lên B2,
+ * trích xuất thumbnail, lấy duration, và lưu thông tin VOD vào DB.
+ * @param {object} params
+ * @param {string} params.streamKey - Khóa của stream.
+ * @param {string} params.originalFilePath - Đường dẫn tuyệt đối của file FLV gốc trên server.
+ * @param {string} params.originalFileName - Tên file gốc (ví dụ: streamkey.flv).
+ * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
+ */
+const processRecordedFileToVOD = async ({
+  streamKey,
+  originalFilePath, // e.g., /mnt/recordings/live/streamkey.flv
+  originalFileName, // e.g., streamkey.flv
+}) => {
+  let mp4FilePath = null;
+  let thumbnailFilePath = null;
+  let b2UploadResponse = null;
+
+  try {
+    // 0. Kiểm tra file gốc tồn tại
+    try {
+      await fs.access(originalFilePath);
+    } catch (e) {
+      throw new AppError(
+        `Original recorded file not found at ${originalFilePath}`,
+        404
+      );
+    }
+
+    // 1. Lấy thông tin Stream từ DB
+    const stream = await Stream.findOne({ where: { streamKey } });
+    if (!stream) {
+      throw new AppError(`Stream with key ${streamKey} not found.`, 404);
+    }
+    if (!stream.userId) {
+      throw new AppError(
+        `User ID not found for stream ${streamKey}. Cannot create VOD without owner.`,
+        400
+      );
+    }
+
+    // 2. Tạo đường dẫn cho file MP4 và Thumbnail
+    const baseName = path.basename(
+      originalFileName,
+      path.extname(originalFileName)
+    );
+    const tempDir = path.dirname(originalFilePath);
+
+    mp4FilePath = path.join(tempDir, `${baseName}.mp4`);
+    // Đặt tên file thumbnail rõ ràng hơn, ví dụ sử dụng baseName của video
+    thumbnailFilePath = path.join(tempDir, `${baseName}-thumbnail.jpg`);
+
+    // 3. Chuyển đổi FLV sang MP4
+    await convertFlvToMp4(originalFilePath, mp4FilePath);
+
+    // 4. Lấy thời lượng video (từ file MP4 đã convert)
+    const durationSeconds = await getVideoDurationInSeconds(mp4FilePath);
+
+    // 5. Trích xuất Thumbnail (từ file MP4)
+    let thumbnailTimestampString;
+    if (durationSeconds >= 5) {
+      thumbnailTimestampString = "00:00:05.000";
+    } else if (durationSeconds >= 1) {
+      // For videos between 1s and 5s, take thumbnail at 1s
+      thumbnailTimestampString = formatDurationForFFmpeg(1);
+    } else if (durationSeconds > 0) {
+      // For videos shorter than 1s, take thumbnail at 10% of duration (but at least 0.001s)
+      const seekTime = Math.max(0.001, durationSeconds * 0.1);
+      thumbnailTimestampString = formatDurationForFFmpeg(seekTime);
+    } else {
+      // Duration is 0 or invalid
+      thumbnailTimestampString = "00:00:00.001";
+      logger.warn(
+        `Video duration is ${durationSeconds}s. Attempting to extract the earliest possible frame for thumbnail for ${mp4FilePath}.`
+      );
+    }
+    logger.info(
+      `Attempting to extract thumbnail for ${mp4FilePath} at ${thumbnailTimestampString} (video duration: ${durationSeconds}s)`
+    );
+    await extractThumbnail(
+      mp4FilePath,
+      thumbnailFilePath,
+      thumbnailTimestampString
+    );
+
+    // 6. Chuẩn bị stream và thông tin file để upload
+    logger.info(`Preparing streams for MP4 file: ${mp4FilePath}`);
+    const mp4FileSize = fsSync.statSync(mp4FilePath).size;
+    const mp4FileStream = fsSync.createReadStream(mp4FilePath);
+
+    let thumbnailFileStream = null;
+    let thumbnailFileSize = 0;
+    let thumbnailExists = false;
+    try {
+      await fs.access(thumbnailFilePath); // Kiểm tra file thumbnail tồn tại
+      thumbnailExists = true;
+      logger.info(`Preparing stream for thumbnail file: ${thumbnailFilePath}`);
+      thumbnailFileSize = fsSync.statSync(thumbnailFilePath).size;
+      thumbnailFileStream = fsSync.createReadStream(thumbnailFilePath);
+    } catch (thumbAccessError) {
+      logger.warn(
+        `Thumbnail file at ${thumbnailFilePath} not accessible or does not exist. Proceeding without thumbnail upload.`
+      );
+      // thumbnailFileStream sẽ vẫn là null
+    }
+
+    // 7. Chuẩn bị tên file trên B2 và Upload MỘT LẦN
+    const timestamp = Date.now();
+    const videoFileNameInB2 = `vods/${baseName}-${timestamp}.mp4`;
+    let thumbnailFileNameInB2 = null;
+    if (thumbnailExists) {
+      thumbnailFileNameInB2 = `vods/thumbnails/${baseName}-thumb-${timestamp}.jpg`;
+    }
+
+    const presignedUrlDuration =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
+
+    logger.info(
+      `Uploading video stream and thumbnail stream (if available) to B2...`
+    );
+    // Giả định uploadToB2AndGetPresignedUrl đã được cập nhật để nhận stream và file size
+    // Ví dụ: uploadToB2AndGetPresignedUrl(videoStream, videoSize, videoName, videoMime, thumbStream, thumbSize, thumbName, thumbMime, metaDuration, presignedDuration)
+    b2UploadResponse = await uploadToB2AndGetPresignedUrl(
+      mp4FileStream,
+      mp4FileSize,
+      videoFileNameInB2,
+      "video/mp4",
+      thumbnailFileStream, // Sẽ là null nếu không có thumbnail
+      thumbnailFileSize, // Sẽ là 0 nếu không có thumbnail
+      thumbnailFileNameInB2, // Sẽ là null nếu không có thumbnail
+      thumbnailExists ? "image/jpeg" : null, // MIME type cho thumbnail
+      durationSeconds,
+      presignedUrlDuration
+    );
+
+    // Gán thông tin file để có thể xóa nếu bước sau lỗi
+    // (Phần này đã có trong try...catch của createVODFromUpload, nhưng ở đây là context khác)
+
+    // 8. Tạo bản ghi VOD trong DB
+    const vodData = {
+      streamId: stream.id,
+      userId: stream.userId,
+      streamKey: streamKey,
+      title: stream.title || `VOD for ${streamKey}`,
+      description: stream.description || "",
+      videoUrl: b2UploadResponse.video.url,
+      urlExpiresAt: b2UploadResponse.video.urlExpiresAt,
+      b2FileId: b2UploadResponse.video.b2FileId,
+      b2FileName: b2UploadResponse.video.b2FileName,
+      durationSeconds,
+
+      thumbnailUrl: b2UploadResponse.thumbnail?.url || null,
+      thumbnailUrlExpiresAt: b2UploadResponse.thumbnail?.urlExpiresAt || null,
+      b2ThumbnailFileId: b2UploadResponse.thumbnail?.b2FileId || null,
+      b2ThumbnailFileName: b2UploadResponse.thumbnail?.b2FileName || null,
+    };
+
+    logger.info("Creating VOD entry in database with data:", vodData);
+    // Nên sử dụng hàm createVOD service để thống nhất logic tạo VOD
+    const newVOD = await createVOD(vodData);
+    logger.info(`VOD entry created with ID: ${newVOD.id}`);
+
+    return newVOD;
+  } catch (error) {
+    logger.error(
+      `Error in processRecordedFileToVOD for streamKey ${streamKey}:`,
+      error
+    );
+    // Logic dọn dẹp file trên B2 nếu đã upload nhưng gặp lỗi
+    if (
+      b2UploadResponse?.video?.b2FileId &&
+      b2UploadResponse?.video?.b2FileName
+    ) {
+      try {
+        logger.info(
+          `Service: Dọn dẹp video ${b2UploadResponse.video.b2FileName} trên B2 do lỗi trong processRecordedFileToVOD.`
+        );
+        await deleteFileFromB2(
+          b2UploadResponse.video.b2FileName,
+          b2UploadResponse.video.b2FileId
+        );
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp video ${b2UploadResponse.video.b2FileName} trên B2:`,
+          deleteB2Error
+        );
+      }
+    }
+    if (
+      b2UploadResponse?.thumbnail?.b2FileId &&
+      b2UploadResponse?.thumbnail?.b2FileName
+    ) {
+      try {
+        logger.info(
+          `Service: Dọn dẹp thumbnail ${b2UploadResponse.thumbnail.b2FileName} trên B2 do lỗi trong processRecordedFileToVOD.`
+        );
+        await deleteFileFromB2(
+          b2UploadResponse.thumbnail.b2FileName,
+          b2UploadResponse.thumbnail.b2FileId
+        );
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail ${b2UploadResponse.thumbnail.b2FileName} trên B2:`,
+          deleteB2Error
+        );
+      }
+    }
+    handleServiceError(error, "xử lý file ghi hình thành VOD");
+  } finally {
+    // 9. Xóa file tạm trên server (FLV, MP4, Thumbnail)
+    const filesToDelete = [
+      originalFilePath,
+      mp4FilePath,
+      thumbnailFilePath,
+    ].filter(Boolean);
+    for (const filePath of filesToDelete) {
+      try {
+        if (filePath) {
+          // Check if filePath is not null
+          await fs.access(filePath); // Check if file exists before trying to delete
+          await fs.unlink(filePath);
+          logger.info(`Successfully deleted temporary file: ${filePath}`);
+        }
+      } catch (e) {
+        // Nếu file không tồn tại (ví dụ, mp4FilePath chưa được tạo do lỗi convert) thì bỏ qua
+        if (e.code !== "ENOENT") {
+          logger.error(`Failed to delete temporary file ${filePath}:`, e);
+        }
+      }
+    }
+  }
+};
+
+/**
+ * Tạo một bản ghi VOD mới. (Hàm này có thể dùng cho admin upload thủ công)
+ * @param {object} vodData - Dữ liệu cho VOD mới.
+ * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
+ */
+const createVOD = async (vodData) => {
+  try {
+    logger.info("Attempting to create VOD with data:", {
+      userId: vodData.userId,
+      title: vodData.title,
+      streamId: vodData.streamId,
+      videoUrlExists: !!vodData.videoUrl,
+      thumbnailUrlExists: !!vodData.thumbnailUrl,
+      b2FileId: vodData.b2FileId,
+      b2ThumbnailFileId: vodData.b2ThumbnailFileId,
+    });
+
+    // Kiểm tra các trường bắt buộc cơ bản
+    if (
+      !vodData.userId ||
+      !vodData.title ||
+      !vodData.videoUrl ||
+      !vodData.urlExpiresAt ||
+      !vodData.b2FileId ||
+      !vodData.b2FileName
+    ) {
+      throw new AppError(
+        "Missing required fields for VOD creation (userId, title, videoUrl, urlExpiresAt, b2FileId, b2FileName).",
+        400
+      );
+    }
+
+    const newVOD = await VOD.create({
+      userId: vodData.userId,
+      title: vodData.title,
+      description: vodData.description,
+      videoUrl: vodData.videoUrl,
+      urlExpiresAt: new Date(vodData.urlExpiresAt), // Đảm bảo là Date object
+      b2FileId: vodData.b2FileId,
+      b2FileName: vodData.b2FileName,
+      durationSeconds: vodData.durationSeconds || 0,
+
+      // Các trường thumbnail mới, cho phép null nếu không có thumbnail
+      thumbnailUrl: vodData.thumbnailUrl || null,
+      thumbnailUrlExpiresAt: vodData.thumbnailUrlExpiresAt
+        ? new Date(vodData.thumbnailUrlExpiresAt)
+        : null,
+      b2ThumbnailFileId: vodData.b2ThumbnailFileId || null,
+      b2ThumbnailFileName: vodData.b2ThumbnailFileName || null,
+
+      // Các trường tùy chọn liên quan đến stream
+      streamId: vodData.streamId || null,
+      streamKey: vodData.streamKey || null,
+    });
+
+    logger.info(`VOD created successfully with ID: ${newVOD.id}`);
+    return newVOD;
+  } catch (error) {
+    // Bọc lỗi bằng handleServiceError để chuẩn hóa
+    // throw handleServiceError(error, "Failed to create VOD in service");
+    // Để đơn giản, tạm thời re-throw lỗi gốc để controller xử lý và log chi tiết hơn
+    logger.error("Error in vodService.createVOD:", error);
+    throw error;
+  }
+};
+
+/**
+ * Lấy danh sách VOD với tùy chọn filter và phân trang.
+ * @param {object} options - Tùy chọn truy vấn.
+ * @returns {Promise<{vods: VOD[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+const getVODs = async (options = {}) => {
+  try {
+    const { streamId, userId, streamKey, page = 1, limit = 10 } = options;
+    const offset = (page - 1) * limit;
+    const whereClause = {};
+
+    if (streamId) whereClause.streamId = streamId;
+    if (userId) whereClause.userId = userId;
+    if (streamKey) whereClause.streamKey = streamKey;
+
+    const { count, rows } = await VOD.findAndCountAll({
+      where: whereClause,
+      limit,
+      offset,
+      order: [["createdAt", "DESC"]],
+      attributes: [
+        "id",
+        "title",
+        "videoUrl",
+        "thumbnailUrl",
+        "thumbnailUrlExpiresAt",
+        "b2ThumbnailFileId",
+        "b2ThumbnailFileName",
+        "durationSeconds",
+        "createdAt",
+        "userId",
+        "streamId",
+        "streamKey",
+        "urlExpiresAt",
+        "b2FileName",
+      ],
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        // { model: Stream, as: 'stream', attributes: ['id', 'title'] }, // Có thể bỏ nếu đã có streamKey
+      ],
+    });
+
+    // Logic làm mới pre-signed URL nếu cần (ví dụ, chỉ làm mới khi GET chi tiết)
+    // Ở đây chỉ trả về, client sẽ tự quyết định có cần refresh không.
+
+    return {
+      vods: rows,
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    handleServiceError(error, "lấy danh sách VOD");
+  }
+};
+
+/**
+ * Lấy chi tiết một VOD bằng ID.
+ * Sẽ tự động làm mới pre-signed URL nếu nó sắp hết hạn hoặc đã hết hạn.
+ * @param {number} vodId - ID của VOD.
+ * @returns {Promise<VOD|null>} Đối tượng VOD hoặc null nếu không tìm thấy.
+ */
+const getVODById = async (vodId) => {
+  try {
+    let vod = await VOD.findByPk(vodId, {
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: Stream,
+          as: "stream",
+          attributes: ["id", "title", "streamKey"],
+        },
+      ],
+    });
+    if (!vod) {
+      throw new AppError("VOD không tìm thấy.", 404);
+    }
+
+    // Kiểm tra và làm mới pre-signed URL nếu cần
+    // Ví dụ: làm mới nếu URL hết hạn trong vòng 1 giờ tới
+    const presignedUrlDuration =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+
+    if (!vod.urlExpiresAt || new Date(vod.urlExpiresAt) < oneHourFromNow) {
+      if (vod.b2FileName) {
+        logger.info(
+          `Pre-signed URL for VOD ${vodId} (file: ${vod.b2FileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newViewableUrl = await generatePresignedUrlForExistingFile(
+          vod.b2FileName,
+          presignedUrlDuration
+        );
+        vod.videoUrl = newViewableUrl;
+        vod.urlExpiresAt = new Date(Date.now() + presignedUrlDuration * 1000);
+
+        // Làm mới cả thumbnail nếu có
+        if (vod.thumbnail && vod.thumbnail.includes("?Authorization=")) {
+          // Giả sử thumbnail cũng là pre-signed
+          // Cần logic để lấy b2FileName của thumbnail, hiện tại chưa lưu riêng
+          // Tạm thời bỏ qua refresh thumbnail hoặc giả sử thumbnail có URL public/thời hạn dài hơn
+          // Nếu thumbnail cũng từ B2 và private, bạn cần lưu b2FileName của thumbnail riêng.
+        }
+
+        await vod.save();
+        logger.info(
+          `Refreshed pre-signed URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
+        );
+      } else {
+        logger.warn(
+          `VOD ${vodId} needs URL refresh but b2FileName is missing.`
+        );
+      }
+    }
+
+    return vod;
+  } catch (error) {
+    handleServiceError(error, "lấy chi tiết VOD");
+  }
+};
+
+/**
+ * Xóa một VOD (metadata trong DB và file trên storage).
+ * @param {number} vodId - ID của VOD cần xóa.
+ * @param {number} requestingUserId - ID của người dùng yêu cầu xóa.
+ * @param {boolean} isAdmin - Người dùng có phải là admin không.
+ */
+const deleteVOD = async (vodId, requestingUserId, isAdmin = false) => {
+  try {
+    const vod = await VOD.findByPk(vodId);
+    if (!vod) {
+      throw new AppError("VOD không tìm thấy để xóa.", 404);
+    }
+
+    if (!isAdmin && vod.userId !== requestingUserId) {
+      throw new AppError("Bạn không có quyền xóa VOD này.", 403);
+    }
+
+    // 1. Xóa file trên Backblaze B2 (nếu có b2FileId và b2FileName)
+    if (vod.b2FileId && vod.b2FileName) {
+      try {
+        logger.info(
+          `Deleting VOD file from B2: ${vod.b2FileName} (ID: ${vod.b2FileId})`
+        );
+        await deleteFileFromB2(vod.b2FileName, vod.b2FileId);
+        logger.info(`Successfully deleted ${vod.b2FileName} from B2.`);
+      } catch (b2Error) {
+        // Log lỗi nhưng vẫn tiếp tục xóa bản ghi DB, hoặc throw lỗi tùy theo yêu cầu
+        logger.error(
+          `Failed to delete VOD file ${vod.b2FileName} from B2. Error: ${b2Error.message}. Proceeding with DB deletion.`
+        );
+        // throw new AppError(`Lỗi khi xóa file trên B2: ${b2Error.message}`, 500); // Bỏ comment nếu muốn dừng lại khi xóa B2 lỗi
+      }
+    } else {
+      logger.warn(
+        `VOD ${vodId} does not have b2FileId or b2FileName. Skipping B2 deletion.`
+      );
+    }
+
+    // (Tùy chọn) Xóa cả thumbnail trên B2 nếu nó được lưu riêng và có thông tin.
+
+    // 2. Xóa bản ghi VOD khỏi DB
+    await vod.destroy();
+    logger.info(`VOD record ${vodId} deleted from database successfully.`);
+    // Không cần trả về gì, hoặc có thể trả về một thông báo thành công
+  } catch (error) {
+    handleServiceError(error, "xóa VOD");
+  }
+};
+
+// Hàm này để refresh URL cho một VOD cụ thể, có thể gọi từ một endpoint riêng
+const refreshVODUrl = async (vodId) => {
+  try {
+    const vod = await VOD.findByPk(vodId);
+    if (!vod) {
+      throw new AppError("VOD không tìm thấy.", 404);
+    }
+    if (!vod.b2FileName) {
+      throw new AppError(
+        "Không có thông tin file trên B2 (b2FileName) để làm mới URL.",
+        400
+      );
+    }
+
+    const presignedUrlDuration =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
+    const newViewableUrl = await generatePresignedUrlForExistingFile(
+      vod.b2FileName,
+      presignedUrlDuration
+    );
+
+    vod.videoUrl = newViewableUrl;
+    vod.urlExpiresAt = new Date(Date.now() + presignedUrlDuration * 1000);
+    await vod.save();
+
+    logger.info(
+      `Successfully refreshed pre-signed URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
+    );
+    return {
+      id: vod.id,
+      videoUrl: vod.videoUrl,
+      urlExpiresAt: vod.urlExpiresAt,
+    };
+  } catch (error) {
+    handleServiceError(error, "làm mới URL VOD");
+  }
+};
+
+/**
+ * Xử lý việc tạo VOD từ file upload (local).
+ * Bao gồm việc tạo thumbnail (nếu cần), lấy duration, upload lên B2 và lưu DB.
+ * @param {object} data
+ * @param {number} data.userId
+ * @param {string} data.title
+ * @param {string} [data.description]
+ * @param {string} data.videoFilePath
+ * @param {string} data.originalVideoFileName
+ * @param {string} data.videoMimeType
+ * @param {string} [data.thumbnailFilePath] - Path to thumbnail file (optional)
+ * @param {string} [data.originalThumbnailFileName] - Original thumbnail file name (optional)
+ * @param {string} [data.thumbnailMimeType] - MIME type of the thumbnail (optional)
+ * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
+ */
+const createVODFromUpload = async ({
+  userId,
+  title,
+  description,
+  videoFilePath,
+  originalVideoFileName,
+  videoMimeType,
+  thumbnailFilePath,
+  originalThumbnailFileName,
+  thumbnailMimeType,
+}) => {
+  let b2VideoFileIdToDelete = null;
+  let b2VideoFileNameToDelete = null;
+  let b2ThumbFileIdToDelete = null;
+  let b2ThumbFileNameToDelete = null;
+
+  try {
+    logger.info(
+      `Service: Bắt đầu xử lý upload VOD từ file: ${videoFilePath} cho user: ${userId}`
+    );
+
+    // 1. Lấy thông tin file video (kích thước, thời lượng)
+    const videoStats = await fs.stat(videoFilePath);
+    const videoSize = videoStats.size;
+    if (videoSize === 0) {
+      throw new AppError("Video file is empty.", 400);
+    }
+    const durationSeconds = await getVideoDurationInSeconds(videoFilePath);
+    logger.info(`Service: Thời lượng video: ${durationSeconds} giây.`);
+
+    // 2. Xử lý Thumbnail
+    let thumbnailStream = null;
+    let thumbnailSize = 0;
+    let finalThumbnailMimeType = thumbnailMimeType;
+    let finalOriginalThumbnailFileName = originalThumbnailFileName;
+
+    if (thumbnailFilePath) {
+      // Người dùng cung cấp thumbnail
+      logger.info(
+        `Service: Sử dụng thumbnail từ file cung cấp: ${thumbnailFilePath}`
+      );
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      thumbnailSize = thumbStats.size;
+      if (thumbnailSize > 0) {
+        thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+      }
+    } else {
+      // Không có thumbnail từ người dùng, thử tạo tự động
+      logger.info(
+        `Service: Không có thumbnail từ người dùng, thử tạo tự động từ video: ${videoFilePath}`
+      );
+      const autoThumbnailPath = await generateThumbnailFromVideo(
+        videoFilePath,
+        durationSeconds
+      );
+      if (autoThumbnailPath) {
+        thumbnailFilePath = autoThumbnailPath; // Cập nhật đường dẫn để xóa sau
+        finalOriginalThumbnailFileName = path.basename(autoThumbnailPath);
+        finalThumbnailMimeType = "image/jpeg"; // Hoặc image/png tùy theo generateThumbnailFromVideo
+        const thumbStats = await fs.stat(autoThumbnailPath);
+        thumbnailSize = thumbStats.size;
+        if (thumbnailSize > 0) {
+          thumbnailStream = fsSync.createReadStream(autoThumbnailPath);
+        }
+        logger.info(
+          `Service: Đã tạo thumbnail tự động tại: ${autoThumbnailPath}`
+        );
+      } else {
+        logger.warn(
+          `Service: Không thể tạo thumbnail tự động cho video: ${videoFilePath}`
+        );
+      }
+    }
+
+    // 3. Chuẩn bị tên file trên B2 (Sanitize filenames)
+    const safeOriginalVideoFileName = originalVideoFileName.replace(
+      /[^a-zA-Z0-9.\-_]/g,
+      "_"
+    );
+    let safeOriginalThumbnailFileName = "";
+    if (finalOriginalThumbnailFileName) {
+      safeOriginalThumbnailFileName = finalOriginalThumbnailFileName.replace(
+        /[^a-zA-Z0-9.\-_]/g,
+        "_"
+      );
+    }
+
+    const videoFileNameInB2 = `users/${userId}/vods/${Date.now()}_${safeOriginalVideoFileName}`;
+    let thumbnailFileNameInB2 = null;
+    if (thumbnailStream && safeOriginalThumbnailFileName) {
+      thumbnailFileNameInB2 = `users/${userId}/vods/thumbnails/${Date.now()}_${safeOriginalThumbnailFileName}`;
+    }
+
+    // 4. Tạo video stream
+    const videoStream = fsSync.createReadStream(videoFilePath);
+
+    // 5. Upload lên B2
+    logger.info("Service: Bắt đầu upload stream file lên B2...");
+    const b2Response = await uploadToB2AndGetPresignedUrl(
+      videoStream,
+      videoSize,
+      videoFileNameInB2,
+      videoMimeType,
+      thumbnailStream,
+      thumbnailSize,
+      thumbnailFileNameInB2,
+      finalThumbnailMimeType,
+      durationSeconds
+    );
+    logger.info(
+      `Service: Upload lên B2 thành công: Video - ${
+        b2Response.video.b2FileName
+      }, Thumbnail - ${b2Response.thumbnail?.b2FileName || "N/A"}`
+    );
+
+    b2VideoFileIdToDelete = b2Response.video?.b2FileId;
+    b2VideoFileNameToDelete = b2Response.video?.b2FileName;
+    b2ThumbFileIdToDelete = b2Response.thumbnail?.b2FileId;
+    b2ThumbFileNameToDelete = b2Response.thumbnail?.b2FileName;
+
+    // 6. Tạo bản ghi VOD trong DB
+    const vodToCreate = {
+      userId,
+      title,
+      description,
+      videoUrl: b2Response.video.url,
+      urlExpiresAt: b2Response.video.urlExpiresAt,
+      b2FileId: b2Response.video.b2FileId,
+      b2FileName: b2Response.video.b2FileName,
+      durationSeconds: b2Response.video.durationSeconds,
+      thumbnailUrl: b2Response.thumbnail?.url,
+      thumbnailUrlExpiresAt: b2Response.thumbnail?.urlExpiresAt,
+      b2ThumbnailFileId: b2Response.thumbnail?.b2FileId,
+      b2ThumbnailFileName: b2Response.thumbnail?.b2FileName,
+    };
+
+    const newVOD = await createVOD(vodToCreate);
+    logger.info(`Service: VOD đã được tạo trong DB với ID: ${newVOD.id}`);
+    return newVOD;
+  } catch (error) {
+    logger.error("Service: Lỗi trong createVODFromUpload:", error);
+    if (b2VideoFileIdToDelete && b2VideoFileNameToDelete) {
+      try {
+        logger.info(
+          `Service: Dọn dẹp video ${b2VideoFileNameToDelete} trên B2 do lỗi.`
+        );
+        await deleteFileFromB2(b2VideoFileNameToDelete, b2VideoFileIdToDelete);
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp video ${b2VideoFileNameToDelete} trên B2:`,
+          deleteB2Error
+        );
+      }
+    }
+    if (b2ThumbFileIdToDelete && b2ThumbFileNameToDelete) {
+      try {
+        logger.info(
+          `Service: Dọn dẹp thumbnail ${b2ThumbFileNameToDelete} trên B2 do lỗi.`
+        );
+        await deleteFileFromB2(b2ThumbFileNameToDelete, b2ThumbFileIdToDelete);
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail ${b2ThumbFileNameToDelete} trên B2:`,
+          deleteB2Error
+        );
+      }
+    }
+    if (error instanceof AppError) throw error;
+    throw new AppError(`Lỗi khi xử lý upload VOD: ${error.message}`, 500);
+  }
+};
+
+export const vodService = {
+  createVOD,
+  createVODFromUpload,
+  getVODs,
+  getVODById,
+  deleteVOD,
+  processRecordedFileToVOD,
+  refreshVODUrl,
 };
 ```
 
