@@ -1,4 +1,4 @@
-import { body, param } from "express-validator";
+import { body, param, query } from "express-validator";
 
 // Validator cho việc tạo/upload VOD thủ công bởi admin
 const manualUploadVOD = [
@@ -95,28 +95,28 @@ const uploadLocalVOD = [
 
 // Validator cho việc lấy danh sách VODs
 const getVODsList = [
-  param("streamId")
+  query("streamId")
     .optional()
     .isInt({ gt: 0 })
     .withMessage("Stream ID phải là số nguyên dương.")
     .toInt(),
-  param("userId")
+  query("userId")
     .optional()
     .isInt({ gt: 0 })
     .withMessage("User ID phải là số nguyên dương.")
     .toInt(),
-  param("streamKey").optional().isString().trim(),
-  param("page")
+  query("streamKey").optional().isString().trim(),
+  query("page")
     .optional()
     .isInt({ gt: 0 })
     .withMessage("Page phải là số nguyên dương.")
     .toInt(),
-  param("limit")
+  query("limit")
     .optional()
     .isInt({ gt: 0 })
     .withMessage("Limit phải là số nguyên dương.")
     .toInt(),
-  param("categoryId")
+  query("categoryId")
     .optional()
     .isInt({ gt: 0 })
     .withMessage("Category ID phải là một số nguyên dương (nếu có).")
@@ -124,8 +124,28 @@ const getVODsList = [
   // Bạn có thể thêm sortBy, sortOrder ở đây nếu muốn validate chúng chặt chẽ hơn
 ];
 
+const searchVodsByTagParams = [
+  query("tag")
+    .trim()
+    .notEmpty()
+    .withMessage("Search tag cannot be empty.")
+    .isString()
+    .withMessage("Search tag must be a string."),
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+];
+
 export const vodValidationRules = {
   manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
   uploadLocalVOD,
   getVODsList, // Thêm validator mới
+  searchVodsByTagParams, // Thêm validator cho tìm kiếm theo tag
 };

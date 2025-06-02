@@ -334,6 +334,42 @@ const uploadLocalVODFile = async (req, res, next) => {
   }
 };
 
+const searchVODsByTag = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const {
+      tag,
+      page = 1,
+      limit = 10,
+    } = matchedData(req, { locations: ["query"] });
+
+    const result = await vodService.searchVODsByTag({
+      tag,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result.vods,
+      pagination: {
+        totalItems: result.totalItems,
+        totalPages: result.totalPages,
+        currentPage: result.currentPage,
+        limit: parseInt(limit, 10),
+        tagSearched: tag, // Optionally include the tag searched for
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const vodController = {
   uploadVOD,
   uploadLocalVODFile,
@@ -341,4 +377,5 @@ export const vodController = {
   getVODDetails,
   removeVOD,
   refreshVODSignedUrl,
+  searchVODsByTag,
 };

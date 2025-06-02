@@ -3,6 +3,7 @@ import {
   updateStreamInfoService,
   getStreamsListService,
   getStreamDetailsService,
+  searchStreamsByTagService,
 } from "../services/streamService.js";
 import { validationResult, matchedData } from "express-validator";
 import { v4 as uuidv4 } from "uuid";
@@ -289,6 +290,41 @@ export const getStreamById = async (req, res, next) => {
     });
   } catch (error) {
     logger.error("Error in getStreamById controller:", error);
+    next(error);
+  }
+};
+
+export const searchStreamsByTag = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const {
+      tag,
+      page = 1,
+      limit = 10,
+    } = matchedData(req, { locations: ["query"] });
+
+    const result = await searchStreamsByTagService({
+      tag,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Streams fetched successfully by tag",
+      totalItems: result.totalItems,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      tagSearched: tag,
+      streams: result.streams,
+    });
+  } catch (error) {
+    logger.error("Controller: Error searching streams by tag:", error);
     next(error);
   }
 };

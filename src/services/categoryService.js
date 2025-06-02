@@ -10,6 +10,7 @@ import fsSync from "fs";
 import path from "path";
 import slugify from "slugify";
 import dotenv from "dotenv";
+import { Op } from "sequelize";
 
 dotenv.config();
 
@@ -435,6 +436,58 @@ export const getCategoryDetailsService = async (categoryIdOrSlug) => {
       error
     );
     handleServiceError(error, "get category details");
+  }
+};
+
+/**
+ * Search for Categories by a specific tag.
+ * @param {object} options
+ * @param {string} options.tag - The tag to search for.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{categories: Category[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+export const searchCategoriesByTagService = async ({
+  tag,
+  page = 1,
+  limit = 10,
+}) => {
+  try {
+    logger.info(
+      `Service: Searching Categories with tag: "${tag}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const { count, rows } = await Category.findAndCountAll({
+      where: {
+        tags: {
+          [Op.contains]: [tag], // PostgreSQL specific: checks if array contains the element
+        },
+      },
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [["name", "ASC"]], // Order by name, for example
+      attributes: {
+        // Exclude B2 details if not needed for this search result
+        exclude: [
+          "b2ThumbnailFileId",
+          "b2ThumbnailFileName",
+          "thumbnailUrlExpiresAt",
+        ],
+      },
+    });
+
+    logger.info(`Service: Found ${count} Categories for tag "${tag}"`);
+
+    return {
+      categories: rows,
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    logger.error(`Service: Error searching Categories by tag "${tag}":`, error);
+    handleServiceError(error, "search Categories by tag");
   }
 };
 

@@ -44,8 +44,20 @@ router.post(
  */
 router.get(
   "/",
+  vodValidationRules.getVODsList, // Áp dụng validator cho query params
   // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
   vodController.getAllVODs
+);
+
+/**
+ * @route   GET /api/vod/search
+ * @desc    Tìm kiếm VODs theo tag.
+ * @access  Public
+ */
+router.get(
+  "/search",
+  vodValidationRules.searchVodsByTagParams, // Validator cho query params
+  vodController.searchVODsByTag
 );
 
 /**

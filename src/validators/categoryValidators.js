@@ -77,3 +77,23 @@ export const validateGetCategoriesQuery = [
     .withMessage("Limit must be a positive integer")
     .toInt(),
 ];
+
+export const validateSearchCategoriesByTagParams = [
+  query("tag")
+    .trim()
+    .notEmpty()
+    .withMessage("Search tag cannot be empty.")
+    .isString()
+    .withMessage("Search tag must be a string."),
+  // Optional pagination for categories search results
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+];

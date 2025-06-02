@@ -539,3 +539,86 @@ export const markEnded = async (streamKey, viewerCount) => {
     throw new Error("Failed to mark stream as ended: " + error.message);
   }
 };
+
+/**
+ * Search for Streams by a specific tag.
+ * @param {object} options
+ * @param {string} options.tag - The tag to search for.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{streams: Stream[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+export const searchStreamsByTagService = async ({
+  tag,
+  page = 1,
+  limit = 10,
+}) => {
+  try {
+    logger.info(
+      `Service: Searching Streams with tag: "${tag}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const categoriesWithTag = await Category.findAll({
+      where: {
+        tags: {
+          [Op.contains]: [tag],
+        },
+      },
+      attributes: ["id"],
+    });
+
+    if (!categoriesWithTag || categoriesWithTag.length === 0) {
+      logger.info(
+        `Service: No categories found with tag: "${tag}" for Streams`
+      );
+      return {
+        streams: [],
+        totalItems: 0,
+        totalPages: 0,
+        currentPage: parseInt(page, 10),
+      };
+    }
+
+    const categoryIds = categoriesWithTag.map((cat) => cat.id);
+    logger.info(
+      `Service: Categories found for Streams with tag "${tag}": IDs ${categoryIds.join(
+        ", "
+      )}`
+    );
+
+    const { count, rows } = await Stream.findAndCountAll({
+      where: {
+        categoryId: {
+          [Op.in]: categoryIds,
+        },
+        // Optionally filter by status, e.g., only 'live' streams
+        // status: 'live',
+      },
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [["createdAt", "DESC"]],
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: Category,
+          as: "category",
+          attributes: ["id", "name", "slug", "tags"],
+        },
+      ],
+      distinct: true,
+    });
+
+    logger.info(`Service: Found ${count} Streams for tag "${tag}"`);
+
+    return {
+      streams: rows,
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    logger.error(`Service: Error searching Streams by tag "${tag}":`, error);
+    handleServiceError(error, "search Streams by tag"); // Ensure handleServiceError is robust
+  }
+};

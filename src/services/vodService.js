@@ -15,6 +15,7 @@ import path from "path";
 import { spawn } from "child_process";
 import dotenv from "dotenv";
 import { Readable } from "stream";
+import { Op } from "sequelize";
 
 dotenv.config();
 
@@ -961,6 +962,97 @@ const createVODFromUpload = async ({
   }
 };
 
+/**
+ * Search for VODs by a specific tag.
+ * @param {object} options
+ * @param {string} options.tag - The tag to search for.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{vods: VOD[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+const searchVODsByTag = async ({ tag, page = 1, limit = 10 }) => {
+  try {
+    logger.info(
+      `Service: Searching VODs with tag: "${tag}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (page - 1) * limit;
+
+    // 1. Find categories containing the tag
+    const categoriesWithTag = await Category.findAll({
+      where: {
+        tags: {
+          [Op.contains]: [tag], // PostgreSQL specific: checks if array contains the element
+        },
+      },
+      attributes: ["id"], // Only need category IDs
+    });
+
+    if (!categoriesWithTag || categoriesWithTag.length === 0) {
+      logger.info(`Service: No categories found with tag: "${tag}"`);
+      return {
+        vods: [],
+        totalItems: 0,
+        totalPages: 0,
+        currentPage: parseInt(page, 10),
+      };
+    }
+
+    const categoryIds = categoriesWithTag.map((cat) => cat.id);
+    logger.info(
+      `Service: Categories found with tag "${tag}": IDs ${categoryIds.join(
+        ", "
+      )}`
+    );
+
+    // 2. Find VODs belonging to these categories
+    const { count, rows } = await VOD.findAndCountAll({
+      where: {
+        categoryId: {
+          [Op.in]: categoryIds,
+        },
+      },
+      limit,
+      offset,
+      order: [["createdAt", "DESC"]],
+      attributes: [
+        // Define attributes to return, similar to getVODs
+        "id",
+        "title",
+        "videoUrl",
+        "thumbnailUrl",
+        "durationSeconds",
+        "createdAt",
+        "userId",
+        "categoryId",
+        // Ensure these are included if your VOD model has them and they are relevant
+        "urlExpiresAt",
+        "thumbnailUrlExpiresAt",
+      ],
+      include: [
+        // Include associated models as needed
+        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: Category,
+          as: "category",
+          attributes: ["id", "name", "slug", "tags"],
+        },
+      ],
+    });
+
+    logger.info(`Service: Found ${count} VODs for tag "${tag}"`);
+
+    return {
+      vods: rows,
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    logger.error(`Service: Error searching VODs by tag "${tag}":`, error);
+    handleServiceError(error, "search VODs by tag");
+  }
+};
+
 export const vodService = {
   createVOD,
   createVODFromUpload,
@@ -969,4 +1061,5 @@ export const vodService = {
   deleteVOD,
   processRecordedFileToVOD,
   refreshVODUrl,
+  searchVODsByTag,
 };
