@@ -1,9 +1,9 @@
 // scripts/assignAdmin.js
-import { User } from "./src/models/index.js"; // Đảm bảo đường dẫn này chính xác
-import sequelize from "./src/config/database.js"; // Đảm bảo đường dẫn này chính xác
+import { User } from "../src/models/index.js";
+import sequelize from "../src/config/database.js";
 
 // !!! THAY ĐỔI USERNAME Ở ĐÂY !!!
-const usernameToMakeAdmin = "YOUR_TARGET_USERNAME"; // <-- Thay thế bằng username của người dùng bạn muốn gán quyền admin
+const usernameToMakeAdmin = "xuanhaiAdmin"; // <-- Thay thế bằng username của người dùng bạn muốn gán quyền admin
 
 if (usernameToMakeAdmin === "YOUR_TARGET_USERNAME") {
   console.error(
