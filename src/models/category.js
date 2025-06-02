@@ -1,6 +1,6 @@
 import { DataTypes } from "sequelize";
 import sequelize from "../config/database.js";
-import slugify from "slugify"; 
+import slugify from "slugify";
 
 const Category = sequelize.define(
   "Category",
@@ -57,7 +57,7 @@ const Category = sequelize.define(
     // Options
     sequelize, // This is automatically passed if you define it on the sequelize instance globally, but good to be explicit
     modelName: "Category", // Conventionally, modelName is singular and PascalCase
-    tableName: "categories",
+    tableName: "Categories",
     timestamps: true, // Sequelize will manage createdAt and updatedAt
     hooks: {
       beforeValidate: (category) => {

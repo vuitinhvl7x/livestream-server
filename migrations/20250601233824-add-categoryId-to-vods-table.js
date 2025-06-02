@@ -7,7 +7,7 @@ export default {
       type: Sequelize.INTEGER,
       allowNull: true,
       references: {
-        model: "categories",
+        model: "Categories",
         key: "id",
       },
       onUpdate: "CASCADE",
