@@ -28,6 +28,7 @@ const B2_PRESIGNED_URL_DURATION_IMAGES =
  * @param {string} data.name - Category name.
  * @param {string} [data.description] - Category description.
  * @param {string} [data.slug] - Category slug (if provided, otherwise generated from name).
+ * @param {string[]} [data.tags] - Array of tags for the category.
  * @param {string} [data.thumbnailFilePath] - Path to temporary thumbnail file.
  * @param {string} [data.originalThumbnailFileName] - Original name of the thumbnail file.
  * @param {string} [data.thumbnailMimeType] - Mime type of the thumbnail.
@@ -38,6 +39,7 @@ export const createCategoryService = async ({
   name,
   description,
   slug,
+  tags,
   thumbnailFilePath,
   originalThumbnailFileName,
   thumbnailMimeType,
@@ -101,6 +103,7 @@ export const createCategoryService = async ({
           strict: true,
           remove: /[*+~.()\'\"!:@]/g,
         }),
+      tags: tags || [],
       thumbnailUrl: thumbnailB2Response?.url || null,
       thumbnailUrlExpiresAt: thumbnailB2Response?.urlExpiresAt || null,
       b2ThumbnailFileId: thumbnailB2Response?.b2FileId || null,
@@ -151,6 +154,7 @@ export const updateCategoryService = async (categoryIdOrSlug, updateData) => {
     name,
     description,
     slug,
+    tags,
     thumbnailFilePath,
     originalThumbnailFileName,
     thumbnailMimeType,
@@ -226,6 +230,7 @@ export const updateCategoryService = async (categoryIdOrSlug, updateData) => {
         strict: true,
         remove: /[*+~.()\'\"!:@]/g,
       });
+    if (tags !== undefined) category.tags = tags;
     // Slug will also be updated by hook if name changes
 
     await category.save();
@@ -420,7 +425,8 @@ export const getCategoryDetailsService = async (categoryIdOrSlug) => {
     delete categoryResponse.b2ThumbnailFileId;
     delete categoryResponse.b2ThumbnailFileName;
     delete categoryResponse.thumbnailUrlExpiresAt;
-    // For public facing, only send name, slug, description, thumbnailUrl
+    // Ensure 'tags' is part of categoryResponse if needed, it should be by default
+    // For public facing, only send name, slug, description, thumbnailUrl, tags
 
     return categoryResponse;
   } catch (error) {

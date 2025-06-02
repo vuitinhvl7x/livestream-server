@@ -14,6 +14,16 @@ export const validateCreateCategory = [
     .withMessage(
       "Description must be a string with a maximum of 1000 characters."
     ),
+  body("tags")
+    .optional()
+    .isArray()
+    .withMessage("Tags must be an array.")
+    .custom((tags) => {
+      if (!tags.every((tag) => typeof tag === "string")) {
+        throw new Error("Each tag must be a string.");
+      }
+      return true;
+    }),
   // thumbnailFile will be handled by multer and service layer
 ];
 
@@ -35,6 +45,16 @@ export const validateUpdateCategory = [
     .withMessage(
       "Description must be a string with a maximum of 1000 characters."
     ),
+  body("tags")
+    .optional()
+    .isArray()
+    .withMessage("Tags must be an array.")
+    .custom((tags) => {
+      if (!tags.every((tag) => typeof tag === "string")) {
+        throw new Error("Each tag must be a string.");
+      }
+      return true;
+    }),
   // thumbnailFile will be handled by multer and service layer
 ];
 

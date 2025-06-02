@@ -47,6 +47,11 @@ const Category = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    tags: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      allowNull: true,
+      defaultValue: [],
+    },
     thumbnailUrlExpiresAt: {
       type: DataTypes.DATE,
       allowNull: true,

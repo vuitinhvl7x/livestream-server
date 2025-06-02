@@ -28,7 +28,7 @@ export const createCategory = async (req, res, next) => {
     const userIdForPath = req.user?.id; // Or some other logic for B2 path
 
     const servicePayload = {
-      ...validatedData, // name, description, slug (optional)
+      ...validatedData, // name, description, slug (optional), tags (optional)
       thumbnailFilePath: req.file?.path,
       originalThumbnailFileName: req.file?.originalname,
       thumbnailMimeType: req.file?.mimetype,
@@ -80,7 +80,7 @@ export const updateCategory = async (req, res, next) => {
     const validatedData = matchedData(req);
 
     const servicePayload = {
-      ...validatedData, // name, description, slug (optional)
+      ...validatedData, // name, description, slug (optional), tags (optional)
       thumbnailFilePath: req.file?.path,
       originalThumbnailFileName: req.file?.originalname,
       thumbnailMimeType: req.file?.mimetype,
