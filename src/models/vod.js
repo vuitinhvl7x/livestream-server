@@ -75,6 +75,16 @@ const VOD = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    categoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "categories", // Tên bảng Categories
+        key: "id",
+      },
+      onUpdate: "CASCADE",
+      onDelete: "SET NULL",
+    },
     durationSeconds: {
       // Đổi tên từ duration để rõ ràng hơn là giây
       type: DataTypes.FLOAT, // Đơn vị: giây (thay đổi từ INTEGER sang FLOAT)

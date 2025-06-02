@@ -55,6 +55,7 @@ const uploadVOD = async (req, res, next) => {
       b2FileName, // Tên file trên B2
       thumbnail, // URL thumbnail (có thể cũng là pre-signed)
       durationSeconds, // Thời lượng video
+      categoryId, // Thêm categoryId
     } = validatedData;
 
     // Service createVOD đã được cập nhật để xử lý các trường này
@@ -70,6 +71,7 @@ const uploadVOD = async (req, res, next) => {
       b2FileName,
       thumbnail,
       durationSeconds,
+      categoryId, // Truyền categoryId
     });
 
     res.status(201).json({
@@ -98,6 +100,7 @@ const getAllVODs = async (req, res, next) => {
       limit,
       sortBy = "createdAt", // Mặc định sắp xếp theo ngày tạo
       sortOrder = "DESC", // Mặc định giảm dần
+      categoryId, // Thêm categoryId
     } = req.query;
 
     const options = {
@@ -108,6 +111,7 @@ const getAllVODs = async (req, res, next) => {
       limit: limit ? parseInt(limit) : 10,
       sortBy: String(sortBy),
       sortOrder: String(sortOrder).toUpperCase() === "ASC" ? "ASC" : "DESC",
+      categoryId: categoryId ? parseInt(categoryId) : undefined, // Thêm categoryId
     };
 
     const result = await vodService.getVODs(options);
@@ -251,7 +255,7 @@ const uploadLocalVODFile = async (req, res, next) => {
       );
     }
 
-    const { title, description } = validatedData;
+    const { title, description, categoryId } = validatedData;
     const videoFile = req.files.videoFile[0];
     videoFilePathTemp = videoFile.path; // Lưu đường dẫn file video tạm
 
@@ -280,6 +284,7 @@ const uploadLocalVODFile = async (req, res, next) => {
       thumbnailFilePath, // Truyền đường dẫn file thumbnail (có thể là null)
       originalThumbnailFileName, // có thể là null
       thumbnailMimeType, // có thể là null
+      categoryId, // Thêm categoryId
     };
 
     logger.info("Controller: Gọi vodService.createVODFromUpload với payload:", {

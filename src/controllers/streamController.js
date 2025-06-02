@@ -38,7 +38,7 @@ export const createStream = async (req, res, next) => {
       throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
     }
 
-    const { title, description } = validatedData;
+    const { title, description, categoryId } = validatedData;
     let thumbnailFile = null;
 
     if (req.file && req.file.fieldname === "thumbnailFile") {
@@ -53,6 +53,7 @@ export const createStream = async (req, res, next) => {
       thumbnailFilePath: thumbnailFile?.path,
       originalThumbnailFileName: thumbnailFile?.originalname,
       thumbnailMimeType: thumbnailFile?.mimetype,
+      categoryId,
     };
 
     logger.info(
@@ -210,8 +211,13 @@ export const getStreams = async (req, res) => {
   }
 
   try {
-    const { status, page, limit } = req.query;
-    const result = await getStreamsListService({ status, page, limit });
+    const { status, page, limit, categoryId } = req.query;
+    const result = await getStreamsListService({
+      status,
+      page,
+      limit,
+      categoryId,
+    });
 
     res.status(200).json({
       message: "Streams fetched successfully",
@@ -229,6 +235,7 @@ export const getStreams = async (req, res) => {
         thumbnailUrl: stream.thumbnailUrl,
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
         user: stream.user,
+        category: stream.category,
         createdAt: stream.createdAt,
       })),
     });
@@ -275,6 +282,7 @@ export const getStreamById = async (req, res, next) => {
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
         streamKey: stream.streamKey,
         user: stream.user,
+        category: stream.category,
         createdAt: stream.createdAt,
         updatedAt: stream.updatedAt,
       },

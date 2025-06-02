@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { Stream, User } from "../models/index.js";
+import { Stream, User, Category } from "../models/index.js";
 import { Op } from "sequelize"; // For more complex queries if needed later
 import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Added for error handling
 import {
@@ -29,6 +29,7 @@ const logger = {
  * @param {string} [data.thumbnailFilePath] - Đường dẫn file thumbnail tạm (nếu có).
  * @param {string} [data.originalThumbnailFileName] - Tên file thumbnail gốc (nếu có).
  * @param {string} [data.thumbnailMimeType] - Mime type của thumbnail (nếu có).
+ * @param {number} [data.categoryId] - ID của category (nếu có).
  * @returns {Promise<Stream>} Đối tượng Stream đã tạo.
  */
 export const createStreamWithThumbnailService = async ({
@@ -38,6 +39,7 @@ export const createStreamWithThumbnailService = async ({
   thumbnailFilePath,
   originalThumbnailFileName,
   thumbnailMimeType,
+  categoryId,
 }) => {
   let b2ThumbFileIdToDelete = null;
   let b2ThumbFileNameToDelete = null;
@@ -49,6 +51,14 @@ export const createStreamWithThumbnailService = async ({
 
     const streamKey = uuidv4();
     let thumbnailB2Response = null;
+
+    // Kiểm tra Category nếu categoryId được cung cấp
+    if (categoryId) {
+      const category = await Category.findByPk(categoryId);
+      if (!category) {
+        throw new AppError(`Category with ID ${categoryId} not found.`, 400);
+      }
+    }
 
     if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
       logger.info(`Service: Có thumbnail được cung cấp: ${thumbnailFilePath}`);
@@ -118,6 +128,7 @@ export const createStreamWithThumbnailService = async ({
       thumbnailUrlExpiresAt: thumbnailB2Response?.urlExpiresAt || null,
       b2ThumbnailFileId: thumbnailB2Response?.b2FileId || null,
       b2ThumbnailFileName: thumbnailB2Response?.b2FileName || null,
+      categoryId: categoryId || null, // Gán categoryId
     };
 
     const newStream = await Stream.create(streamData);
@@ -158,6 +169,7 @@ export const createStreamWithThumbnailService = async ({
  * @param {string} [updateData.thumbnailFilePath] - Đường dẫn file thumbnail tạm mới (nếu có).
  * @param {string} [updateData.originalThumbnailFileName] - Tên file thumbnail gốc mới (nếu có).
  * @param {string} [updateData.thumbnailMimeType] - Mime type của thumbnail mới (nếu có).
+ * @param {number} [updateData.categoryId] - ID của category mới (nếu có).
  * @returns {Promise<Stream>} Thông tin stream đã cập nhật.
  * @throws {AppError} Nếu có lỗi xảy ra.
  */
@@ -187,6 +199,7 @@ export const updateStreamInfoService = async (
       thumbnailFilePath,
       originalThumbnailFileName,
       thumbnailMimeType,
+      categoryId,
     } = updateData;
 
     // Lưu lại thông tin thumbnail cũ để xóa nếu upload thumbnail mới thành công
@@ -255,6 +268,20 @@ export const updateStreamInfoService = async (
     // Cập nhật các trường thông tin khác
     if (title !== undefined) stream.title = title;
     if (description !== undefined) stream.description = description;
+
+    // Cập nhật categoryId
+    if (categoryId !== undefined) {
+      // Cho phép cả việc gán null
+      if (categoryId === null) {
+        stream.categoryId = null;
+      } else {
+        const category = await Category.findByPk(categoryId);
+        if (!category) {
+          throw new AppError(`Category with ID ${categoryId} not found.`, 400);
+        }
+        stream.categoryId = categoryId;
+      }
+    }
 
     if (status !== undefined && ["live", "ended"].includes(status)) {
       // Logic cập nhật status, startTime, endTime tương tự như trước
@@ -338,23 +365,30 @@ export const updateStreamInfoService = async (
 
 /**
  * Lấy danh sách các stream.
- * @param {object} queryParams - Tham số query (status, page, limit).
+ * @param {object} queryParams - Tham số query (status, page, limit, categoryId).
  * @returns {Promise<object>} Danh sách stream và thông tin phân trang.
  * @throws {Error} Nếu có lỗi xảy ra.
  */
 export const getStreamsListService = async (queryParams) => {
   try {
-    const { status, page = 1, limit = 10 } = queryParams;
+    const { status, page = 1, limit = 10, categoryId } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
     const whereClause = {};
     if (status && ["live", "ended"].includes(status)) {
       whereClause.status = status;
     }
+    if (categoryId) {
+      // Lọc theo categoryId
+      whereClause.categoryId = categoryId;
+    }
 
     const { count, rows } = await Stream.findAndCountAll({
       where: whereClause,
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
+      ],
       order: [["createdAt", "DESC"]],
       limit: parseInt(limit, 10),
       offset: offset,
@@ -382,7 +416,10 @@ export const getStreamsListService = async (queryParams) => {
 export const getStreamDetailsService = async (streamId) => {
   try {
     const stream = await Stream.findByPk(streamId, {
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
+      ],
     });
 
     if (!stream) {

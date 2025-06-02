@@ -62,6 +62,11 @@ const manualUploadVOD = [
     .trim()
     .isURL()
     .withMessage("Thumbnail (nếu có) phải là một URL hợp lệ."),
+  body("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID phải là một số nguyên dương (nếu có).")
+    .toInt(),
   // userId sẽ được lấy từ token xác thực, không cần validate ở đây
 ];
 
@@ -78,12 +83,49 @@ const uploadLocalVOD = [
     .trim()
     .isLength({ max: 5000 })
     .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+  body("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID phải là một số nguyên dương (nếu có).")
+    .toInt(),
   // Các trường tùy chọn khác có thể thêm sau nếu cần
   // File video sẽ được xử lý bởi multer, không cần validate ở đây
   // streamId, streamKey, userId sẽ được xử lý trong controller
 ];
 
+// Validator cho việc lấy danh sách VODs
+const getVODsList = [
+  param("streamId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Stream ID phải là số nguyên dương.")
+    .toInt(),
+  param("userId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("User ID phải là số nguyên dương.")
+    .toInt(),
+  param("streamKey").optional().isString().trim(),
+  param("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page phải là số nguyên dương.")
+    .toInt(),
+  param("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit phải là số nguyên dương.")
+    .toInt(),
+  param("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID phải là một số nguyên dương (nếu có).")
+    .toInt(),
+  // Bạn có thể thêm sortBy, sortOrder ở đây nếu muốn validate chúng chặt chẽ hơn
+];
+
 export const vodValidationRules = {
   manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
   uploadLocalVOD,
+  getVODsList, // Thêm validator mới
 };

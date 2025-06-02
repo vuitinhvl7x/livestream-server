@@ -1,4 +1,4 @@
-import { VOD, User, Stream } from "../models/index.js";
+import { VOD, User, Stream, Category } from "../models/index.js";
 import { AppError, handleServiceError } from "../utils/errorHandler.js";
 import {
   uploadToB2AndGetPresignedUrl,
@@ -231,6 +231,7 @@ const processRecordedFileToVOD = async ({
         400
       );
     }
+    const streamCategoryId = stream.categoryId; // Lấy categoryId từ stream
 
     // 2. Tạo đường dẫn cho file MP4 và Thumbnail
     const baseName = path.basename(
@@ -346,9 +347,14 @@ const processRecordedFileToVOD = async ({
       thumbnailUrlExpiresAt: b2UploadResponse.thumbnail?.urlExpiresAt || null,
       b2ThumbnailFileId: b2UploadResponse.thumbnail?.b2FileId || null,
       b2ThumbnailFileName: b2UploadResponse.thumbnail?.b2FileName || null,
+      categoryId: streamCategoryId,
     };
 
-    logger.info("Creating VOD entry in database with data:", vodData);
+    logger.info("Creating VOD entry in database with data:", {
+      ...vodData,
+      videoUrl: "HIDDEN",
+      thumbnailUrl: "HIDDEN",
+    });
     // Nên sử dụng hàm createVOD service để thống nhất logic tạo VOD
     const newVOD = await createVOD(vodData);
     logger.info(`VOD entry created with ID: ${newVOD.id}`);
@@ -439,6 +445,7 @@ const createVOD = async (vodData) => {
       thumbnailUrlExists: !!vodData.thumbnailUrl,
       b2FileId: vodData.b2FileId,
       b2ThumbnailFileId: vodData.b2ThumbnailFileId,
+      categoryId: vodData.categoryId,
     });
 
     // Kiểm tra các trường bắt buộc cơ bản
@@ -454,6 +461,17 @@ const createVOD = async (vodData) => {
         "Missing required fields for VOD creation (userId, title, videoUrl, urlExpiresAt, b2FileId, b2FileName).",
         400
       );
+    }
+
+    // Kiểm tra Category nếu categoryId được cung cấp
+    if (vodData.categoryId) {
+      const category = await Category.findByPk(vodData.categoryId);
+      if (!category) {
+        throw new AppError(
+          `Category with ID ${vodData.categoryId} not found.`,
+          400
+        );
+      }
     }
 
     const newVOD = await VOD.create({
@@ -477,6 +495,7 @@ const createVOD = async (vodData) => {
       // Các trường tùy chọn liên quan đến stream
       streamId: vodData.streamId || null,
       streamKey: vodData.streamKey || null,
+      categoryId: vodData.categoryId || null,
     });
 
     logger.info(`VOD created successfully with ID: ${newVOD.id}`);
@@ -497,13 +516,21 @@ const createVOD = async (vodData) => {
  */
 const getVODs = async (options = {}) => {
   try {
-    const { streamId, userId, streamKey, page = 1, limit = 10 } = options;
+    const {
+      streamId,
+      userId,
+      streamKey,
+      categoryId,
+      page = 1,
+      limit = 10,
+    } = options;
     const offset = (page - 1) * limit;
     const whereClause = {};
 
     if (streamId) whereClause.streamId = streamId;
     if (userId) whereClause.userId = userId;
     if (streamKey) whereClause.streamKey = streamKey;
+    if (categoryId) whereClause.categoryId = categoryId;
 
     const { count, rows } = await VOD.findAndCountAll({
       where: whereClause,
@@ -525,10 +552,12 @@ const getVODs = async (options = {}) => {
         "streamKey",
         "urlExpiresAt",
         "b2FileName",
+        "categoryId",
       ],
       include: [
         { model: User, as: "user", attributes: ["id", "username"] },
-        // { model: Stream, as: 'stream', attributes: ['id', 'title'] }, // Có thể bỏ nếu đã có streamKey
+        { model: Stream, as: "stream", attributes: ["id", "title"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],
     });
 
@@ -562,6 +591,7 @@ const getVODById = async (vodId) => {
           as: "stream",
           attributes: ["id", "title", "streamKey"],
         },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],
     });
     if (!vod) {
@@ -754,6 +784,7 @@ const refreshVODUrl = async (vodId) => {
  * @param {string} [data.thumbnailFilePath] - Path to thumbnail file (optional)
  * @param {string} [data.originalThumbnailFileName] - Original thumbnail file name (optional)
  * @param {string} [data.thumbnailMimeType] - MIME type of the thumbnail (optional)
+ * @param {number} data.categoryId - Category ID for the VOD
  * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
  */
 const createVODFromUpload = async ({
@@ -766,6 +797,7 @@ const createVODFromUpload = async ({
   thumbnailFilePath,
   originalThumbnailFileName,
   thumbnailMimeType,
+  categoryId,
 }) => {
   let b2VideoFileIdToDelete = null;
   let b2VideoFileNameToDelete = null;
@@ -890,6 +922,7 @@ const createVODFromUpload = async ({
       thumbnailUrlExpiresAt: b2Response.thumbnail?.urlExpiresAt,
       b2ThumbnailFileId: b2Response.thumbnail?.b2FileId,
       b2ThumbnailFileName: b2Response.thumbnail?.b2FileName,
+      categoryId: categoryId,
     };
 
     const newVOD = await createVOD(vodToCreate);

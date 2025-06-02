@@ -15,6 +15,11 @@ export const validateCreateStream = [
     .withMessage(
       "Description must be a string with a maximum of 1000 characters"
     ),
+  body("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID must be a positive integer")
+    .toInt(),
 ];
 
 export const validateUpdateStream = [
@@ -39,6 +44,11 @@ export const validateUpdateStream = [
     .optional()
     .isIn(["live", "ended"])
     .withMessage("Status must be either 'live' or 'ended'"),
+  body("categoryId")
+    .optional({ nullable: true })
+    .isInt({ gt: 0 })
+    .withMessage("Category ID must be a positive integer or null")
+    .toInt(),
 ];
 
 export const validateGetStreams = [
@@ -50,17 +60,22 @@ export const validateGetStreams = [
     .optional()
     .isInt({ gt: 0 })
     .withMessage("Page must be a positive integer")
-    .toInt(), // Chuyển đổi thành số nguyên
+    .toInt(),
   query("limit")
     .optional()
     .isInt({ gt: 0 })
     .withMessage("Limit must be a positive integer")
-    .toInt(), // Chuyển đổi thành số nguyên
+    .toInt(),
+  query("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID must be a positive integer")
+    .toInt(),
 ];
 
 export const validateGetStreamById = [
   param("streamId")
     .isInt({ gt: 0 })
     .withMessage("Stream ID must be a positive integer")
-    .toInt(), // Chuyển đổi thành số nguyên
+    .toInt(),
 ];

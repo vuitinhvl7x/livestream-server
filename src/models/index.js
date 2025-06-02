@@ -2,6 +2,7 @@ import sequelize from "../config/database.js";
 import User from "./user.js";
 import Stream from "./stream.js";
 import VOD from "./vod.js";
+import Category from "./category.js";
 
 // --- Định nghĩa Associations ---
 
@@ -38,6 +39,28 @@ VOD.belongsTo(Stream, {
   as: "stream",
 });
 
+// Category <-> Stream (One-to-Many)
+Category.hasMany(Stream, {
+  foreignKey: "categoryId",
+  as: "streams",
+  onDelete: "SET NULL",
+});
+Stream.belongsTo(Category, {
+  foreignKey: "categoryId",
+  as: "category",
+});
+
+// Category <-> VOD (One-to-Many)
+Category.hasMany(VOD, {
+  foreignKey: "categoryId",
+  as: "categoryVods",
+  onDelete: "SET NULL",
+});
+VOD.belongsTo(Category, {
+  foreignKey: "categoryId",
+  as: "category",
+});
+
 // --- Export Models và Sequelize Instance ---
 
-export { sequelize, User, Stream, VOD };
+export { sequelize, User, Stream, VOD, Category };
