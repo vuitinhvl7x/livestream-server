@@ -12,6 +12,9 @@ import webhookRoutes from "./routes/webhookRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import vodRoutes from "./routes/vodRoutes.js";
 import initializeSocketHandlers from "./socketHandlers.js";
+// Import category routes
+import categoryRoutes from "./routes/categoryRoutes.js";
+import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
 
 dotenv.config();
 
@@ -44,6 +47,9 @@ app.use("/api/streams", streamRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/vod", vodRoutes);
+// Add category routes
+app.use("/api/categories", categoryRoutes);
+app.use("/api/admin/categories", categoryAdminRoutes);
 
 // Base route
 app.get("/", (req, res) => {

@@ -21,6 +21,7 @@ export const register = async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
+        role: user.role,
         createdAt: user.createdAt,
       },
       token,
@@ -45,6 +46,7 @@ export const login = async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
+        role: user.role,
       },
       token,
     });
@@ -86,6 +88,7 @@ export const updateProfile = async (req, res) => {
         displayName: updatedUser.displayName,
         avatarUrl: updatedUser.avatarUrl,
         bio: updatedUser.bio,
+        role: updatedUser.role,
         updatedAt: updatedUser.updatedAt,
         // Consider also returning b2 related fields if needed by client,
         // or keep them server-side only.

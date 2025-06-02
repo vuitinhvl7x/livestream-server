@@ -41,6 +41,7 @@ const authenticateToken = (req, res, next) => {
     req.user = {
       id: decoded.id,
       username: decoded.username,
+      role: decoded.role,
       // Thêm các trường khác nếu có trong payload của token
     };
     console.log("User authenticated via JWT:", req.user);
@@ -67,7 +68,7 @@ export default authenticateToken;
 
 export function verifyWebhookTokenInParam(req, res, next) {
   const receivedToken = req.params.webhookToken;
-  const expectedToken = process.env.WEBHOOK_SECRET_TOKEN; 
+  const expectedToken = process.env.WEBHOOK_SECRET_TOKEN;
 
   if (!expectedToken) {
     console.error(

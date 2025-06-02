@@ -37,6 +37,11 @@ const User = sequelize.define(
       type: DataTypes.TEXT, // For longer text
       allowNull: true,
     },
+    role: {
+      type: DataTypes.ENUM("user", "admin"),
+      allowNull: false,
+      defaultValue: "user",
+    },
   },
   {
     timestamps: true,
