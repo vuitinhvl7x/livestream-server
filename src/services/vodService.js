@@ -17,6 +17,7 @@ import dotenv from "dotenv";
 import { Readable } from "stream";
 import { Op } from "sequelize";
 import { Sequelize } from "sequelize";
+import redisClient from "../lib/redis.js";
 
 dotenv.config();
 
@@ -24,6 +25,10 @@ const logger = {
   info: console.log,
   error: console.error,
 };
+
+// Cache để lưu trữ lượt xem gần đây (vodId -> Map(userIdOrIp -> timestamp))
+// const recentViewsCache = new Map(); // Loại bỏ cache Map trong bộ nhớ
+const VIEW_COOLDOWN_MS = 5 * 60 * 1000; // 5 phút (tính bằng mili giây)
 
 // Helper function to format duration for FFmpeg timestamp
 const formatDurationForFFmpeg = (totalSecondsParam) => {
@@ -190,6 +195,103 @@ const extractThumbnail = async (
   } catch (error) {
     logger.error(`Error extracting thumbnail from ${videoPath}:`, error);
     throw error;
+  }
+};
+
+/**
+ * Tăng lượt xem cho VOD nếu người dùng chưa xem trong khoảng thời gian cooldown.
+ * @param {number} vodId - ID của VOD.
+ * @param {string} userIdOrIp - ID người dùng hoặc địa chỉ IP.
+ */
+const incrementVodViewCount = async (vodId, userIdOrIp) => {
+  try {
+    const redisKey = `vod_view_cooldown:${vodId}:${userIdOrIp}`;
+    logger.info(`Service: [VOD-${vodId}] Checking Redis for key: ${redisKey}`);
+    const keyExists = await redisClient.exists(redisKey);
+    logger.info(
+      `Service: [VOD-${vodId}] Redis key ${redisKey} exists? ${
+        keyExists === 1 ? "Yes" : "No"
+      }`
+    );
+
+    if (keyExists === 1) {
+      // redisClient.exists trả về 1 nếu key tồn tại, 0 nếu không
+      logger.info(
+        `Service: [VOD-${vodId}] View count for by ${userIdOrIp} not incremented due to Redis cooldown.`
+      );
+      return;
+    }
+
+    logger.info(
+      `Service: [VOD-${vodId}] Attempting to increment viewCount in DB.`
+    );
+    const incrementResult = await VOD.increment("viewCount", {
+      by: 1,
+      where: { id: vodId },
+    });
+
+    let affectedRowsCount = 0;
+    if (
+      Array.isArray(incrementResult) &&
+      incrementResult.length > 1 &&
+      typeof incrementResult[1] === "number"
+    ) {
+      affectedRowsCount = incrementResult[1];
+    } else if (typeof incrementResult === "number") {
+      // Một số trường hợp cũ hơn hoặc dialect khác
+      affectedRowsCount = incrementResult;
+    } else if (
+      Array.isArray(incrementResult) &&
+      incrementResult.length > 0 &&
+      Array.isArray(incrementResult[0]) &&
+      typeof incrementResult[0][1] === "number"
+    ) {
+      // trường hợp trả về dạng [[instance, changed_boolean_or_count], metadata_count]
+      // hoặc [[result_array], count ] - đây là một phỏng đoán dựa trên sự đa dạng của Sequelize
+      // Thử lấy từ metadata nếu có dạng phức tạp hơn [[...], count]
+      if (
+        incrementResult.length > 1 &&
+        typeof incrementResult[1] === "number"
+      ) {
+        affectedRowsCount = incrementResult[1];
+      } else if (
+        incrementResult[0].length > 1 &&
+        typeof incrementResult[0][1] === "number"
+      ) {
+        // Nếu phần tử đầu tiên là một mảng và phần tử thứ hai của mảng đó là số
+        affectedRowsCount = incrementResult[0][1];
+      }
+    }
+    // Fallback: Nếu không chắc, và không có lỗi, có thể coi là thành công nếu VOD tồn tại
+    // Tuy nhiên, để an toàn, chúng ta dựa vào affectedRowsCount.
+
+    logger.info(
+      `Service: [VOD-${vodId}] affectedRowsCount from DB increment: ${affectedRowsCount}`
+    );
+
+    if (affectedRowsCount > 0) {
+      logger.info(
+        `Service: [VOD-${vodId}] Setting Redis cooldown key: ${redisKey} for ${VIEW_COOLDOWN_MS}ms`
+      );
+      await redisClient.set(redisKey, "1", "PX", VIEW_COOLDOWN_MS);
+      logger.info(
+        `Service: [VOD-${vodId}] Incremented view count by ${userIdOrIp}. Cooldown key set in Redis.`
+      );
+    } else {
+      logger.error(
+        `Service: [VOD-${vodId}] VOD not found or view count not incremented in DB. affectedRowsCount: ${affectedRowsCount}`
+      );
+    }
+  } catch (error) {
+    logger.error(
+      `Service: [VOD-${vodId}] Error in incrementVodViewCount for ${userIdOrIp}:`,
+      error
+    );
+    if (error.message.toLowerCase().includes("redis")) {
+      logger.error(
+        `Service: [VOD-${vodId}] Redis error during view count increment. Proceeding without setting cooldown key.`
+      );
+    }
   }
 };
 
@@ -543,6 +645,7 @@ const getVODs = async (options = {}) => {
         "id",
         "title",
         "description",
+        "viewCount",
         "videoUrl",
         "thumbnailUrl",
         "thumbnailUrlExpiresAt",
@@ -582,9 +685,10 @@ const getVODs = async (options = {}) => {
  * Lấy chi tiết một VOD bằng ID.
  * Sẽ tự động làm mới pre-signed URL nếu nó sắp hết hạn hoặc đã hết hạn.
  * @param {number} vodId - ID của VOD.
+ * @param {string} [userIdOrIp] - ID người dùng hoặc địa chỉ IP để theo dõi lượt xem.
  * @returns {Promise<VOD|null>} Đối tượng VOD hoặc null nếu không tìm thấy.
  */
-const getVODById = async (vodId) => {
+const getVODById = async (vodId, userIdOrIp) => {
   try {
     let vod = await VOD.findByPk(vodId, {
       include: [
@@ -599,6 +703,16 @@ const getVODById = async (vodId) => {
     });
     if (!vod) {
       throw new AppError("VOD không tìm thấy.", 404);
+    }
+
+    // Tăng lượt xem (bất đồng bộ, không cần await)
+    if (userIdOrIp) {
+      incrementVodViewCount(vodId, userIdOrIp).catch((err) => {
+        logger.error(
+          `Service: фоновая ошибка при увеличении счетчика просмотров для VOD ${vodId}:`, // Lỗi nền khi tăng lượt xem
+          err
+        );
+      });
     }
 
     // Kiểm tra và làm mới pre-signed URL nếu cần
@@ -1058,7 +1172,7 @@ const searchVODs = async ({
         "userId",
         "categoryId",
         "urlExpiresAt",
-        // Thêm các trường khác nếu cần thiết cho hiển thị kết quả tìm kiếm
+        "viewCount", // Thêm viewCount
       ],
       include: includeClauses,
       distinct: true, // Quan trọng cho count khi dùng include phức tạp
@@ -1066,8 +1180,32 @@ const searchVODs = async ({
 
     logger.info(`Service: Found ${count} VODs matching criteria.`);
 
+    // Đảm bảo viewCount có trong kết quả trả về
+    const enrichedVods = rows.map((vod) => {
+      const plainVod = vod.get({ plain: true });
+      return {
+        ...plainVod,
+        viewCount: plainVod.viewCount !== undefined ? plainVod.viewCount : 0, // Đảm bảo có giá trị mặc định
+        // Đảm bảo category được trả về đúng cấu trúc
+        category: plainVod.category
+          ? {
+              id: plainVod.category.id,
+              name: plainVod.category.name,
+              slug: plainVod.category.slug,
+              // tags: plainVod.category.tags // Bỏ tags nếu không cần thiết ở đây hoặc đã có trong category
+            }
+          : null,
+        user: plainVod.user
+          ? {
+              id: plainVod.user.id,
+              username: plainVod.user.username,
+            }
+          : null,
+      };
+    });
+
     return {
-      vods: rows,
+      vods: enrichedVods,
       totalItems: count,
       totalPages: Math.ceil(count / limit),
       currentPage: parseInt(page, 10),

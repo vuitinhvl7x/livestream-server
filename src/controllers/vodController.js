@@ -143,8 +143,11 @@ const getVODDetails = async (req, res, next) => {
       throw new AppError("ID VOD không hợp lệ.", 400);
     }
 
-    // vodService.getVODById sẽ tự động refresh URL nếu cần
-    const vod = await vodService.getVODById(vodId);
+    // Lấy userId hoặc IP để theo dõi lượt xem
+    const userIdOrIp = req.user?.id || req.ip;
+
+    // vodService.getVODById sẽ tự động refresh URL và tăng lượt xem nếu cần
+    const vod = await vodService.getVODById(vodId, userIdOrIp);
 
     res.status(200).json({
       success: true,

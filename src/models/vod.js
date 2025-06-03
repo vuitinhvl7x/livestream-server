@@ -89,6 +89,11 @@ const VOD = sequelize.define(
       // Đổi tên từ duration để rõ ràng hơn là giây
       type: DataTypes.FLOAT, // Đơn vị: giây (thay đổi từ INTEGER sang FLOAT)
     },
+    viewCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
     // createdAt và updatedAt được Sequelize quản lý tự động nếu timestamps: true
   },
   {
