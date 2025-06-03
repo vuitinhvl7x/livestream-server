@@ -281,7 +281,7 @@ export const getStreamById = async (req, res, next) => {
         viewerCount: stream.viewerCount,
         thumbnailUrl: stream.thumbnailUrl,
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
-        streamKey: stream.streamKey,
+        // streamKey: stream.streamKey, // TODO: Remove this field from response
         user: stream.user,
         category: stream.category,
         createdAt: stream.createdAt,

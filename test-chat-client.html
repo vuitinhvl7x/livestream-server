@@ -71,6 +71,9 @@
       <button id="joinRoomBtn" disabled>Join Room</button>
       <button id="leaveRoomBtn" disabled>Leave Room</button>
     </div>
+    <div>
+      <p>Current Viewers in Room: <span id="viewerCount">N/A</span></p>
+    </div>
     <hr />
 
     <div>
@@ -92,8 +95,10 @@
       const messageInput = document.getElementById("message");
       const sendMessageBtn = document.getElementById("sendMessageBtn");
       const messagesList = document.getElementById("messages");
+      const viewerCountDisplay = document.getElementById("viewerCount");
 
       let socket;
+      let currentJoinedRoom = null;
 
       function addLog(message, type = "log") {
         const item = document.createElement("li");
@@ -152,7 +157,30 @@
           joinRoomBtn.disabled = true;
           leaveRoomBtn.disabled = true;
           sendMessageBtn.disabled = true;
+          currentJoinedRoom = null;
+          viewerCountDisplay.textContent = "N/A";
+          messagesList.innerHTML = ""; // Xóa tin nhắn cũ khi disconnect
           socket = null; // Reset socket
+        });
+
+        socket.on("recent_chat_history", (data) => {
+          addLog(
+            `Received recent chat history for room ${data.streamId} (${data.messages.length} messages).`,
+            "log"
+          );
+          // Xóa các tin nhắn hiện tại trước khi thêm lịch sử để tránh trùng lặp nếu rejoin
+          // messagesList.innerHTML = ""; // Cân nhắc nếu muốn giữ log của client
+          data.messages.forEach((msg) => {
+            // Định dạng tin nhắn lịch sử giống như tin nhắn mới
+            addLog(
+              `(Room: ${msg.streamId || data.streamId}) ${msg.username}: ${
+                msg.message
+              }`,
+              "received"
+            );
+          });
+          // Đảm bảo cuộn xuống dưới sau khi tải lịch sử
+          messagesList.scrollTop = messagesList.scrollHeight;
         });
 
         socket.on("new_message", (data) => {
@@ -160,6 +188,31 @@
             `(Room: ${data.streamId}) ${data.username}: ${data.message}`,
             "received"
           );
+        });
+
+        socket.on("viewer_count_updated", (data) => {
+          addLog(
+            `Viewer count for room ${data.roomId} updated to: ${data.count}`,
+            "log"
+          );
+          if (currentJoinedRoom && data.roomId === currentJoinedRoom) {
+            viewerCountDisplay.textContent = data.count;
+          }
+        });
+
+        socket.on("stream_ended_notification", (data) => {
+          addLog(`SERVER: ${data.message} (Room: ${data.roomId})`, "error");
+          if (currentJoinedRoom && data.roomId === currentJoinedRoom) {
+            messageInput.disabled = true;
+            sendMessageBtn.disabled = true;
+            leaveRoomBtn.disabled = true; // Vô hiệu hóa cả nút leave
+            currentJoinedRoom = null; // Coi như đã rời phòng
+            viewerCountDisplay.textContent = "N/A (Stream Ended)";
+            addLog(
+              "Chat and actions for this room have been disabled because the stream ended.",
+              "error"
+            );
+          }
         });
 
         // Bạn có thể thêm listener cho các event khác từ server nếu có
@@ -179,9 +232,16 @@
           return;
         }
         if (socket && socket.connected) {
-          socket.emit("join_stream_room", streamId);
+          // Xóa tin nhắn hiển thị trên UI trước khi join phòng mới (nếu cần)
+          // messagesList.innerHTML = "";
+          // Dòng trên có thể xóa log của client, cân nhắc vị trí đặt nó.
+          // Nếu chỉ muốn xóa tin nhắn chat, cần có cơ chế phân biệt log và chat message.
+          // Hiện tại, cách đơn giản là client sẽ thấy log cũ + lịch sử + tin nhắn mới.
+
+          socket.emit("join_stream_room", { streamId });
           addLog(`Attempting to join room: ${streamId}`, "log");
-          // Enable send message and leave room
+          currentJoinedRoom = streamId;
+          viewerCountDisplay.textContent = "Fetching...";
           sendMessageBtn.disabled = false;
           leaveRoomBtn.disabled = false;
         } else {
@@ -192,19 +252,17 @@
       leaveRoomBtn.addEventListener("click", () => {
         const streamId = streamIdInput.value.trim();
         if (!streamId) {
-          // Thường thì client sẽ tự động leave khi disconnect,
-          // nhưng nếu muốn test việc chủ động leave khi vẫn connect:
-          addLog(
-            "Stream ID is required to leave a room. (Currently leaves all rooms on disconnect anyway)",
-            "error"
-          );
+          addLog("Stream ID is required to leave a room.", "error");
           return;
         }
         if (socket && socket.connected) {
-          socket.emit("leave_stream_room", streamId);
+          socket.emit("leave_stream_room", { streamId });
           addLog(`Attempting to leave room: ${streamId}`, "log");
-          sendMessageBtn.disabled = true; // Disable send if not in a room
-          // leaveRoomBtn.disabled = true; // Optionally disable leave after leaving one
+          if (currentJoinedRoom === streamId) {
+            currentJoinedRoom = null;
+            viewerCountDisplay.textContent = "N/A";
+          }
+          sendMessageBtn.disabled = true;
         } else {
           addLog("Not connected.", "error");
         }

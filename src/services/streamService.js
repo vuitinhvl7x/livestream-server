@@ -11,6 +11,8 @@ import fs from "fs/promises"; // Added for file system operations
 import fsSync from "fs"; // Added for sync file system operations (createReadStream)
 import path from "path"; // Added for path manipulation
 import dotenv from "dotenv";
+import redisClient from "../lib/redis.js"; // Import Redis client
+import appEmitter from "../utils/appEvents.js"; // Import App Emitter
 
 dotenv.config();
 
@@ -18,6 +20,45 @@ const logger = {
   // Basic logger
   info: console.log,
   error: console.error,
+  warn: console.warn,
+};
+
+const LIVE_VIEWER_COUNT_KEY_PREFIX = "stream:live_viewers:";
+const LIVE_VIEWER_TTL_SECONDS =
+  parseInt(process.env.REDIS_STREAM_VIEWER_TTL_SECONDS) || 60 * 60 * 2; // 2 hours default
+
+// Helper function to ensure Redis client is connected
+const ensureRedisConnected = async () => {
+  // Các trạng thái cho thấy client chưa sẵn sàng hoặc không có kết nối chủ động
+  const notConnectedStates = ["close", "end"];
+  // Các trạng thái cho thấy client đang trong quá trình thiết lập kết nối
+  const pendingStates = ["connecting", "reconnecting"];
+
+  if (
+    notConnectedStates.includes(redisClient.status) &&
+    !pendingStates.includes(redisClient.status) // Chỉ thử connect nếu không đang pending
+  ) {
+    try {
+      logger.info(
+        `Redis client status is '${redisClient.status}'. Attempting to connect...`
+      );
+      await redisClient.connect(); // connect() trả về một promise giải quyết khi kết nối thành công hoặc lỗi
+      logger.info(
+        "Redis client connection attempt initiated or completed via connect()."
+      );
+    } catch (err) {
+      logger.error(
+        "Error explicitly calling redisClient.connect():",
+        err.message
+      );
+    }
+  } else if (redisClient.status === "ready") {
+    // logger.info("Redis client is already connected and ready."); // Optional: uncomment for debugging
+  } else if (pendingStates.includes(redisClient.status)) {
+    logger.info(
+      `Redis client is already in status '${redisClient.status}'. No action needed here.`
+    );
+  }
 };
 
 /**
@@ -395,11 +436,24 @@ export const getStreamsListService = async (queryParams) => {
       distinct: true, // Important for count when using include with hasMany
     });
 
+    const streamsWithLiveViewers = await Promise.all(
+      rows.map(async (stream) => {
+        const plainStream = stream.get({ plain: true });
+        if (plainStream.status === "live" && plainStream.streamKey) {
+          const liveViewers = await getLiveViewerCount(plainStream.streamKey);
+          plainStream.currentViewerCount = liveViewers;
+        } else {
+          plainStream.currentViewerCount = plainStream.viewerCount; // For ended streams, show final DB count
+        }
+        return plainStream;
+      })
+    );
+
     return {
       totalStreams: count,
       totalPages: Math.ceil(count / parseInt(limit, 10)),
       currentPage: parseInt(page, 10),
-      streams: rows,
+      streams: streamsWithLiveViewers, // Use the enriched list
     };
   } catch (error) {
     console.error("Error in getStreamsListService:", error);
@@ -432,9 +486,10 @@ export const getStreamDetailsService = async (streamId) => {
       3600 * 24 * 7; // 7 days default for images
     const now = new Date();
     const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+    let thumbnailRefreshed = false;
 
     if (
-      stream.thumbnailUrl &&
+      stream.thumbnailUrl && // Use Sequelize instance directly here
       stream.b2ThumbnailFileName &&
       (!stream.thumbnailUrlExpiresAt ||
         new Date(stream.thumbnailUrlExpiresAt) < oneHourFromNow)
@@ -447,11 +502,12 @@ export const getStreamDetailsService = async (streamId) => {
           stream.b2ThumbnailFileName,
           presignedUrlDurationImages
         );
+        // Update the Sequelize instance directly
         stream.thumbnailUrl = newThumbnailUrl;
         stream.thumbnailUrlExpiresAt = new Date(
           Date.now() + presignedUrlDurationImages * 1000
         );
-        await stream.save();
+        thumbnailRefreshed = true; // Mark that we've changed it
         logger.info(
           `Service: Refreshed pre-signed URL for stream thumbnail ${streamId}. New expiry: ${stream.thumbnailUrlExpiresAt}`
         );
@@ -459,7 +515,6 @@ export const getStreamDetailsService = async (streamId) => {
         logger.error(
           `Service: Failed to refresh stream thumbnail URL for stream ${streamId} (file: ${stream.b2ThumbnailFileName}): ${refreshError.message}`
         );
-        // Continue with potentially stale URL, or handle error differently
       }
     } else if (
       stream.thumbnailUrl &&
@@ -472,7 +527,26 @@ export const getStreamDetailsService = async (streamId) => {
       );
     }
 
-    return stream; // Returns null if not found, controller will handle 404
+    // Save the stream instance if thumbnail was refreshed
+    if (thumbnailRefreshed) {
+      await stream.save();
+      logger.info(
+        `Service: Stream ${streamId} saved with refreshed thumbnail URL.`
+      );
+    }
+
+    // Now, get the plain object from the (potentially updated) Sequelize instance
+    const plainStream = stream.get({ plain: true });
+
+    // Get live viewer count if stream is live
+    if (plainStream.status === "live" && plainStream.streamKey) {
+      const liveViewers = await getLiveViewerCount(plainStream.streamKey);
+      plainStream.currentViewerCount = liveViewers;
+    } else {
+      plainStream.currentViewerCount = plainStream.viewerCount;
+    }
+
+    return plainStream; // Returns plain object with potentially refreshed thumbnail and live viewer count
   } catch (error) {
     console.error("Error in getStreamDetailsService:", error);
     throw new Error("Failed to fetch stream details: " + error.message);
@@ -488,17 +562,19 @@ export const getStreamDetailsService = async (streamId) => {
 export const markLive = async (streamKey) => {
   try {
     const [updatedRows] = await Stream.update(
-      { status: "live", startTime: new Date(), endTime: null }, // endTime: null để reset nếu stream đã kết thúc trước đó
+      { status: "live", startTime: new Date(), endTime: null, viewerCount: 0 },
       { where: { streamKey } }
     );
-    if (updatedRows === 0) {
-      console.warn(
+    if (updatedRows > 0) {
+      await resetLiveViewerCount(streamKey);
+      logger.info(
+        `Stream ${streamKey} marked as live. Viewer count reset in DB and Redis.`
+      );
+    } else {
+      logger.warn(
         `markLive: Stream with key ${streamKey} not found or no change needed.`
       );
-      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
-      // throw new Error(`Stream with key ${streamKey} not found.`);
     }
-    console.log(`Stream ${streamKey} marked as live.`);
   } catch (error) {
     console.error(`Error in markLive for stream ${streamKey}:`, error);
     throw new Error("Failed to mark stream as live: " + error.message);
@@ -512,28 +588,64 @@ export const markLive = async (streamKey) => {
  * @returns {Promise<void>}
  * @throws {Error} Nếu có lỗi xảy ra.
  */
-export const markEnded = async (streamKey, viewerCount) => {
+export const markEnded = async (streamKey, finalViewerCountParam) => {
+  // Renamed param for clarity
   try {
+    let actualFinalViewerCount = 0;
+
+    // Prioritize getting the latest count from Redis
+    const liveViewersFromRedis = await getLiveViewerCount(streamKey);
+    if (liveViewersFromRedis !== null) {
+      actualFinalViewerCount = liveViewersFromRedis;
+    }
+
+    if (
+      finalViewerCountParam !== undefined &&
+      !isNaN(parseInt(finalViewerCountParam))
+    ) {
+      const parsedParamCount = parseInt(finalViewerCountParam);
+      if (parsedParamCount > actualFinalViewerCount) {
+        actualFinalViewerCount = parsedParamCount;
+        logger.info(
+          `Using passed finalViewerCountParam ${parsedParamCount} for stream ${streamKey} as it's higher than Redis count.`
+        );
+      }
+    }
+
     const updatePayload = {
       status: "ended",
       endTime: new Date(),
+      viewerCount: Math.max(0, actualFinalViewerCount),
     };
-    if (viewerCount !== undefined && !isNaN(parseInt(viewerCount))) {
-      updatePayload.viewerCount = parseInt(viewerCount);
-    }
 
-    const [updatedRows] = await Stream.update(updatePayload, {
+    const [updatedRows, affectedStreams] = await Stream.update(updatePayload, {
       where: { streamKey },
+      returning: true, // Yêu cầu Sequelize trả về các bản ghi đã được cập nhật
     });
 
-    if (updatedRows === 0) {
-      console.warn(
+    if (updatedRows > 0 && affectedStreams && affectedStreams.length > 0) {
+      const streamId = affectedStreams[0].id; // Lấy streamId từ bản ghi đã cập nhật
+      logger.info(
+        `Stream ${streamKey} (ID: ${streamId}) marked as ended. Final viewer count in DB: ${updatePayload.viewerCount}.`
+      );
+      await resetLiveViewerCount(streamKey);
+      logger.info(
+        `Live viewer count for stream ${streamKey} reset in Redis as stream ended.`
+      );
+
+      // Phát sự kiện stream đã kết thúc
+      appEmitter.emit("stream:ended", {
+        streamId: streamId.toString(),
+        streamKey,
+      });
+      logger.info(
+        `Event 'stream:ended' emitted for streamId: ${streamId}, streamKey: ${streamKey}`
+      );
+    } else {
+      logger.warn(
         `markEnded: Stream with key ${streamKey} not found or no change needed.`
       );
-      // Can throw an error if stream not existing is an edge case
-      // throw new Error(`Stream with key ${streamKey} not found.`);
     }
-    console.log(`Stream ${streamKey} marked as ended.`);
   } catch (error) {
     console.error(`Error in markEnded for stream ${streamKey}:`, error);
     throw new Error("Failed to mark stream as ended: " + error.message);
@@ -638,8 +750,22 @@ export const searchStreamsService = async ({
 
     logger.info(`Service: Found ${count} Streams matching criteria.`);
 
+    const streamsWithLiveViewers = await Promise.all(
+      rows.map(async (streamInstance) => {
+        // Renamed to streamInstance for clarity
+        const plainStream = streamInstance.get({ plain: true });
+        if (plainStream.status === "live" && plainStream.streamKey) {
+          const liveViewers = await getLiveViewerCount(plainStream.streamKey);
+          plainStream.currentViewerCount = liveViewers;
+        } else {
+          plainStream.currentViewerCount = plainStream.viewerCount;
+        }
+        return plainStream;
+      })
+    );
+
     return {
-      streams: rows,
+      streams: streamsWithLiveViewers,
       totalItems: count,
       totalPages: Math.ceil(count / parseInt(limit, 10)),
       currentPage: parseInt(page, 10),
@@ -647,5 +773,172 @@ export const searchStreamsService = async ({
   } catch (error) {
     logger.error(`Service: Error searching Streams:`, error);
     handleServiceError(error, "search Streams"); // Ensure handleServiceError is robust
+  }
+};
+
+/**
+ * Lấy số người xem hiện tại của một stream từ Redis.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<number>} Số người xem hiện tại.
+ */
+export const getLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return 0;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot get live viewer count for ${streamKey}. Returning 0.`
+    );
+    return 0;
+  }
+  try {
+    const countStr = await redisClient.get(
+      `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`
+    );
+    return countStr ? parseInt(countStr, 10) : 0;
+  } catch (error) {
+    logger.error(
+      `Error getting live viewer count for stream ${streamKey} from Redis:`,
+      error
+    );
+    return 0;
+  }
+};
+
+/**
+ * Tăng số người xem hiện tại của một stream trong Redis.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<number|null>} Số người xem mới, hoặc null nếu lỗi nghiêm trọng.
+ */
+export const incrementLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return null;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot increment live viewer count for ${streamKey}.`
+    );
+    return null;
+  }
+  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  try {
+    const newCount = await redisClient.incr(key);
+    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
+    logger.info(
+      `Incremented live viewer count for stream ${streamKey} to ${newCount}`
+    );
+    return newCount;
+  } catch (error) {
+    logger.error(
+      `Error incrementing live viewer count for stream ${streamKey} in Redis:`,
+      error
+    );
+    return null;
+  }
+};
+
+/**
+ * Giảm số người xem hiện tại của một stream trong Redis.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<number|null>} Số người xem mới, hoặc null nếu lỗi nghiêm trọng.
+ */
+export const decrementLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return null;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot decrement live viewer count for ${streamKey}.`
+    );
+    return null;
+  }
+  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  try {
+    const currentCount = await redisClient.decr(key);
+    if (currentCount < 0) {
+      await redisClient.set(key, "0"); // Ensure count doesn't go negative
+      logger.info(
+        `Live viewer count for stream ${streamKey} was negative after DECR, reset to 0.`
+      );
+      await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS); // Set TTL again if key was reset
+      return 0;
+    }
+    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS); // Refresh TTL
+    logger.info(
+      `Decremented live viewer count for stream ${streamKey} to ${currentCount}`
+    );
+    return currentCount;
+  } catch (error) {
+    logger.error(
+      `Error decrementing live viewer count for stream ${streamKey} in Redis:`,
+      error
+    );
+    // Attempt to get current value if decrement fails, or handle error
+    try {
+      const val = await redisClient.get(key); // Get might return null if key disappeared
+      return val ? Math.max(0, parseInt(val, 10)) : 0; // Ensure it's not negative
+    } catch (getErr) {
+      logger.error(
+        `Error fetching count after decrement error for ${streamKey}:`,
+        getErr
+      );
+      return 0; // Fallback to 0
+    }
+  }
+};
+
+/**
+ * Reset số người xem hiện tại của một stream trong Redis về 0.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<void>}
+ */
+export const resetLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot reset live viewer count for ${streamKey}.`
+    );
+    return;
+  }
+  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  try {
+    await redisClient.set(key, "0");
+    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
+    logger.info(`Reset live viewer count for stream ${streamKey} to 0.`);
+  } catch (error) {
+    logger.error(
+      `Error resetting live viewer count for stream ${streamKey} in Redis:`,
+      error
+    );
+  }
+};
+
+/**
+ * Lấy streamKey và status từ streamId.
+ * @param {number} streamId - ID của stream.
+ * @returns {Promise<{streamKey: string, status: string}|null>} Đối tượng chứa streamKey và status, hoặc null nếu không tìm thấy.
+ */
+export const getStreamKeyAndStatusById = async (streamId) => {
+  if (!streamId || isNaN(parseInt(streamId))) {
+    logger.warn(
+      `Invalid streamId provided to getStreamKeyAndStatusById: ${streamId}`
+    );
+    return null;
+  }
+  try {
+    const stream = await Stream.findByPk(streamId, {
+      attributes: ["streamKey", "status"], // Chỉ lấy các trường cần thiết
+    });
+    if (stream && stream.streamKey) {
+      return { streamKey: stream.streamKey, status: stream.status };
+    }
+    logger.warn(
+      `No stream found with streamId ${streamId} for getStreamKeyAndStatusById.`
+    );
+    return null;
+  } catch (error) {
+    logger.error(
+      `Error fetching streamKey and status for streamId ${streamId}:`,
+      error
+    );
+    return null;
   }
 };

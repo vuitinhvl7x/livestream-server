@@ -1,7 +1,17 @@
 import jwt from "jsonwebtoken";
 // import mongoose from "mongoose"; // Không cần trực tiếp nữa
 import dotenv from "dotenv";
-import { saveChatMessage } from "./services/chatService.js"; 
+import {
+  saveChatMessage,
+  getChatHistoryByStreamId,
+} from "./services/chatService.js";
+import {
+  getStreamKeyAndStatusById,
+  incrementLiveViewerCount,
+  decrementLiveViewerCount,
+  // getLiveViewerCount, // Không cần trực tiếp ở đây nữa nếu viewer_count_updated gửi count
+} from "./services/streamService.js"; // Import stream service functions
+import appEmitter from "./utils/appEvents.js"; // Sửa đường dẫn import
 
 dotenv.config();
 
@@ -13,6 +23,12 @@ const JWT_SECRET = process.env.JWT_SECRET;
 // Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
 // const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
 
+const logger = {
+  info: console.log,
+  error: console.error,
+  warn: console.warn,
+}; // Basic logger
+
 const initializeSocketHandlers = (io) => {
   // Middleware xác thực JWT cho Socket.IO
   io.use((socket, next) => {
@@ -22,97 +38,285 @@ const initializeSocketHandlers = (io) => {
     }
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
       if (err) {
-        console.error("Socket JWT verification error:", err.message);
+        logger.error("Socket JWT verification error:", err.message);
         return next(new Error("Authentication error: Invalid token"));
       }
       socket.user = decoded; // Gán thông tin user vào socket
+      // Lưu trữ map của roomId (streamId) tới streamKey
+      socket.joinedStreamData = new Map(); // Map<roomIdString, streamKeyString>
       next();
     });
   });
 
-  io.on("connection", (socket) => {
-    console.log(`User connected: ${socket.id}, UserInfo:`, socket.user);
-
-    socket.on("join_stream_room", (streamId) => {
-      if (!streamId) {
-        console.warn(
-          `User ${socket.user.username} (${socket.id}) tried to join null/undefined streamId`
-        );
-        // Có thể gửi lại lỗi cho client
-        // socket.emit('error_joining_room', { message: 'Stream ID is required.' });
-        return;
-      }
-      socket.join(streamId);
-      console.log(
-        `User ${socket.user.username} (${socket.id}) joined room: ${streamId}`
-      );
-      // Thông báo cho những người khác trong phòng (tùy chọn)
-      // socket.to(streamId).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
+  // Lắng nghe sự kiện stream kết thúc từ appEmitter
+  appEmitter.on("stream:ended", ({ streamId, streamKey }) => {
+    const roomId = streamId; // streamId đã là string từ emitter
+    logger.info(
+      `'stream:ended' event received in socketHandlers for roomId: ${roomId}, streamKey: ${streamKey}.`
+    );
+    // Thông báo cho tất cả client trong phòng rằng stream đã kết thúc
+    io.to(roomId).emit("stream_ended_notification", {
+      roomId: roomId,
+      message: `Stream ${streamKey} has ended. Chat is now disabled for this room.`,
     });
 
-    socket.on("chat_message", async (data) => {
-      const { streamId, message } = data;
-      if (!streamId || !message) {
-        console.warn(
-          "Received chat_message with missing streamId or message:",
-          data
-        );
-        // socket.emit('error_sending_message', { message: 'Stream ID and message are required.' });
-        return;
-      }
+    // Buộc tất cả các socket trong phòng này rời khỏi phòng
+    // io.socketsLeave(roomId) không được khuyến khích trực tiếp, thay vào đó dùng io.in(roomId).disconnectSockets(true) (Socket.IO v4+)
+    // Hoặc lấy danh sách sockets và cho từng cái leave
+    const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
+    if (socketsInRoom) {
+      socketsInRoom.forEach((socketId) => {
+        const socketInstance = io.sockets.sockets.get(socketId);
+        if (socketInstance) {
+          socketInstance.leave(roomId);
+          // Xóa dữ liệu phòng đã join khỏi socket đó nếu cần, tuy nhiên sự kiện disconnect của socket đó sẽ tự xử lý joinedStreamData
+          logger.info(
+            `Socket ${socketId} forcefully left room ${roomId} because stream ended.`
+          );
+        }
+      });
+    } else {
+      logger.info(
+        `No sockets found in room ${roomId} to remove after stream ended.`
+      );
+    }
+    // Hoặc một cách đơn giản hơn nếu chỉ muốn họ không nhận thêm event từ phòng này và để client tự xử lý:
+    // io.in(roomId).emit('force_leave_room', { roomId }); // Client sẽ phải lắng nghe sự kiện này và tự gọi socket.leave
+    // Tuy nhiên, io.socketsLeave(roomId); hoặc lặp và gọi leave là cách server-side chủ động hơn.
+    // Với Socket.IO v4, cách tốt nhất là:
+    // io.in(roomId).disconnectSockets(true); // true để đóng kết nối ngầm
+    // Nếu bạn dùng io.socketsLeave, nó có thể không hoạt động như mong đợi trong mọi trường hợp.
+    // Sử dụng lặp qua các socket và .leave() là một cách an toàn hơn nếu io.socketsLeave() không hoạt động.
 
-      if (!socket.rooms.has(streamId)) {
-        console.warn(
-          `User ${socket.user.username} (${socket.id}) sent message to room ${streamId} they are not in.`
+    // Xem xét sử dụng io.in(roomId).disconnectSockets(true) cho Socket.IO v4+
+    // Dòng dưới đây sẽ cố gắng ngắt kết nối các client trong phòng đó.
+    // Điều này cũng sẽ kích hoạt sự kiện 'disconnect' trên từng client, nơi bạn đã có logic dọn dẹp.
+    io.in(roomId).disconnectSockets(true);
+    logger.info(`Attempted to disconnect sockets in room ${roomId}.`);
+  });
+
+  io.on("connection", (socket) => {
+    logger.info(
+      `User connected: ${socket.id}, UserInfo: ${socket.user?.username}`
+    );
+
+    socket.on("join_stream_room", async (data) => {
+      const { streamId } = data;
+      const roomId = streamId?.toString();
+
+      if (!roomId) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to join with null/undefined streamId`
         );
-        // Có thể join họ vào phòng nếu đó là ý đồ, hoặc báo lỗi
-        // Hoặc đơn giản là không xử lý nếu user không ở trong phòng đó
-        // socket.emit('error_sending_message', { message: \`You are not in room ${streamId}.\` });
+        socket.emit("room_join_error", { message: "Stream ID is required." });
         return;
       }
 
       try {
-        // Gọi service để lưu tin nhắn
+        const streamDetails = await getStreamKeyAndStatusById(streamId);
+
+        if (!streamDetails || !streamDetails.streamKey) {
+          logger.warn(
+            `Stream not found or streamKey missing for streamId ${roomId} when user ${socket.user.username} (${socket.id}) tried to join.`
+          );
+          socket.emit("room_join_error", { message: "Stream not found." });
+          return;
+        }
+
+        const { streamKey, status } = streamDetails;
+
+        if (status !== "live") {
+          logger.warn(
+            `User ${socket.user.username} (${socket.id}) tried to join stream ${streamKey} (ID: ${roomId}) which is not live (status: ${status}).`
+          );
+          socket.emit("room_join_error", { message: "Stream is not live." });
+          return;
+        }
+
+        socket.join(roomId); // Join phòng bằng streamId (roomId)
+        socket.joinedStreamData.set(roomId, streamKey); // Lưu lại mapping
+
+        logger.info(
+          `User ${socket.user.username} (${socket.id}) joined room (streamId): ${roomId} (maps to streamKey: ${streamKey})`
+        );
+
+        // Gửi lịch sử chat gần đây cho user vừa join
+        try {
+          const chatHistory = await getChatHistoryByStreamId(roomId, {
+            page: 1,
+            limit: 20,
+          }); // Lấy 20 tin nhắn gần nhất
+          if (
+            chatHistory &&
+            chatHistory.messages &&
+            chatHistory.messages.length > 0
+          ) {
+            socket.emit("recent_chat_history", {
+              streamId: roomId,
+              messages: chatHistory.messages,
+            });
+            logger.info(
+              `Sent recent chat history to ${socket.user.username} for room ${roomId} (${chatHistory.messages.length} messages).`
+            );
+          }
+        } catch (historyError) {
+          logger.error(
+            `Error fetching recent chat history for room ${roomId}:`,
+            historyError
+          );
+          // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công
+        }
+
+        const currentViewers = await incrementLiveViewerCount(streamKey);
+        if (currentViewers !== null) {
+          // Phát tới phòng có tên là roomId (streamId)
+          io.to(roomId).emit("viewer_count_updated", {
+            streamId: roomId, // hoặc streamKey tùy theo client muốn định danh thế nào
+            count: currentViewers,
+          });
+        }
+        socket.emit("room_joined_successfully", {
+          streamId: roomId,
+          streamKeyForDev: streamKey,
+        }); // Gửi streamId về cho client
+
+        // Optionally, fetch and send recent chat messages or notify others
+        // socket.to(streamKey).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
+      } catch (error) {
+        logger.error(
+          `Error during join_stream_room for streamId ${roomId} by user ${socket.user.username} (${socket.id}):`,
+          error
+        );
+        socket.emit("room_join_error", {
+          message: "Error joining stream. Please try again.",
+        });
+      }
+    });
+
+    socket.on("chat_message", async (data) => {
+      const { streamId, message } = data; // Client gửi streamId (có thể là số hoặc chuỗi)
+      const roomId = streamId?.toString(); // roomId chắc chắn là chuỗi, dùng cho tên phòng socket
+
+      if (!roomId || !message) {
+        logger.warn(
+          "Received chat_message with missing streamId or message:",
+          data
+        );
+        socket.emit("message_error", {
+          message: "Stream ID and message are required.",
+        });
+        return;
+      }
+
+      if (!socket.rooms.has(roomId)) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) sent message to room ${roomId} they are not in.`
+        );
+        socket.emit("message_error", {
+          message: `You are not in room ${roomId}.`,
+        });
+        return;
+      }
+
+      // Lấy streamKey từ map đã lưu nếu cần cho các mục đích khác (không cần cho saveChatMessage nếu nó dùng streamId)
+      // const streamKey = socket.joinedStreamData.get(roomId);
+
+      try {
         const savedMessage = await saveChatMessage({
-          streamId,
+          streamId: roomId, // LUÔN DÙNG roomId (là streamId.toString()) để đảm bảo là chuỗi cho MongoDB
           userId: socket.user.id,
           username: socket.user.username,
           message,
         });
 
-        // Broadcast tin nhắn đến tất cả client trong phòng (bao gồm cả người gửi)
-        io.to(streamId).emit("new_message", {
-          userId: savedMessage.userId, // Sử dụng dữ liệu từ tin nhắn đã lưu/xử lý
+        // Broadcast tin nhắn đến tất cả client trong phòng streamId (roomId)
+        io.to(roomId).emit("new_message", {
+          userId: savedMessage.userId,
           username: savedMessage.username,
           message: savedMessage.message,
-          timestamp: savedMessage.timestamp, // Gửi timestamp từ server (sau khi lưu)
-          streamId: savedMessage.streamId,
+          timestamp: savedMessage.timestamp,
+          streamId: roomId, // Trả về streamId (roomId) cho client
         });
       } catch (error) {
-        console.error("Error saving or broadcasting chat message:", error);
-        // Có thể gửi lỗi về cho client gửi
-        // socket.emit('error_sending_message', { message: 'Could not process your message.' });
-      }
-    });
-
-    socket.on("leave_stream_room", (streamId) => {
-      if (streamId && socket.rooms.has(streamId)) {
-        socket.leave(streamId);
-        console.log(
-          `User ${socket.user.username} (${socket.id}) left room: ${streamId}`
+        logger.error(
+          `Error saving or broadcasting chat message for room ${roomId}:`,
+          error
         );
-        // Thông báo cho những người khác trong phòng (tùy chọn)
-        // socket.to(streamId).emit('user_left_chat', { username: socket.user.username, message: 'has left the chat.' });
+        socket.emit("message_error", {
+          message: "Could not process your message.",
+        });
       }
     });
 
-    socket.on("disconnect", () => {
-      console.log(
-        `User disconnected: ${socket.id}, UserInfo:`,
-        socket.user?.username
+    socket.on("leave_stream_room", async (data) => {
+      const { streamId } = data;
+      const roomId = streamId?.toString();
+      if (!roomId) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to leave with null/undefined streamId`
+        );
+        return;
+      }
+
+      const streamKey = socket.joinedStreamData.get(roomId); // Lấy streamKey từ map
+
+      if (socket.rooms.has(roomId)) {
+        socket.leave(roomId);
+        if (streamKey) {
+          socket.joinedStreamData.delete(roomId); // Xóa mapping
+          logger.info(
+            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId} (was mapped to streamKey: ${streamKey})`
+          );
+
+          const currentViewers = await decrementLiveViewerCount(streamKey);
+          if (currentViewers !== null) {
+            io.to(roomId).emit("viewer_count_updated", {
+              streamId: roomId,
+              count: currentViewers,
+            });
+          }
+        } else {
+          logger.warn(
+            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId}, but no streamKey was mapped. No Redis update.`
+          );
+        }
+      } else {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to leave room ${roomId} they were not in.`
+        );
+      }
+    });
+
+    socket.on("disconnect", async () => {
+      logger.info(
+        `User disconnected: ${socket.id}, UserInfo: ${socket.user?.username}. Cleaning up joined rooms.`
       );
-      // Tự động rời khỏi các phòng khi ngắt kết nối
-      // Socket.IO tự xử lý việc này, nhưng bạn có thể thêm logic tùy chỉnh nếu cần
+      if (socket.joinedStreamData && socket.joinedStreamData.size > 0) {
+        for (const [roomId, streamKey] of socket.joinedStreamData.entries()) {
+          try {
+            logger.info(
+              `Processing disconnect for user ${socket.user?.username} from room (streamId): ${roomId} (mapped to streamKey: ${streamKey})`
+            );
+            const currentViewers = await decrementLiveViewerCount(streamKey);
+            if (currentViewers !== null) {
+              // Vẫn phát tới phòng dựa trên roomId (streamId)
+              io.to(roomId).emit("viewer_count_updated", {
+                streamId: roomId,
+                count: currentViewers,
+              });
+              logger.info(
+                `Sent viewer_count_updated to room ${roomId} after user ${socket.user?.username} disconnected. New count: ${currentViewers}`
+              );
+            }
+          } catch (error) {
+            logger.error(
+              `Error decrementing viewer count for streamKey ${streamKey} (room ${roomId}) on disconnect for user ${socket.user?.username}:`,
+              error
+            );
+          }
+        }
+        socket.joinedStreamData.clear();
+      }
     });
   });
 };
