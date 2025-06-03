@@ -56,8 +56,8 @@ router.get(
  */
 router.get(
   "/search",
-  vodValidationRules.searchVodsByTagParams, // Validator cho query params
-  vodController.searchVODsByTag
+  vodValidationRules.validateVodSearchParams, // Validator cho query params
+  vodController.searchVODs
 );
 
 /**

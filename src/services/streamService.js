@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { Stream, User, Category } from "../models/index.js";
-import { Op } from "sequelize"; // For more complex queries if needed later
+import { Op, Sequelize } from "sequelize"; // For more complex queries if needed later
 import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Added for error handling
 import {
   uploadToB2AndGetPresignedUrl,
@@ -544,72 +544,99 @@ export const markEnded = async (streamKey, viewerCount) => {
  * Search for Streams by a specific tag.
  * @param {object} options
  * @param {string} options.tag - The tag to search for.
+ * @param {string} options.searchQuery - The search query to apply to title and description.
+ * @param {string} options.streamerUsername - The username of the streamer to filter by.
  * @param {number} [options.page=1] - Current page for pagination.
  * @param {number} [options.limit=10] - Number of items per page.
  * @returns {Promise<{streams: Stream[], totalItems: number, totalPages: number, currentPage: number}>}
  */
-export const searchStreamsByTagService = async ({
+export const searchStreamsService = async ({
   tag,
+  searchQuery,
+  streamerUsername,
   page = 1,
   limit = 10,
 }) => {
   try {
     logger.info(
-      `Service: Searching Streams with tag: "${tag}", page: ${page}, limit: ${limit}`
+      `Service: Searching Streams with tag: "${tag}", query: "${searchQuery}", user: "${streamerUsername}", page: ${page}, limit: ${limit}`
     );
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-
-    const categoriesWithTag = await Category.findAll({
-      where: {
-        tags: {
-          [Op.contains]: [tag],
-        },
+    const whereClause = {};
+    const includeClauses = [
+      { model: User, as: "user", attributes: ["id", "username"] },
+      {
+        model: Category,
+        as: "category",
+        attributes: ["id", "name", "slug", "tags"],
       },
-      attributes: ["id"],
-    });
+    ];
 
-    if (!categoriesWithTag || categoriesWithTag.length === 0) {
+    if (tag) {
+      // Sanitize the tag for SQL literal by converting to lowercase and escaping single quotes
+      const lowercasedTag = tag.toLowerCase().replace(/'/g, "''");
+      const categoriesWithTag = await Category.findAll({
+        where: Sequelize.literal(
+          `EXISTS (SELECT 1 FROM unnest(tags) AS t(tag_element) WHERE LOWER(t.tag_element) = '${lowercasedTag}')`
+        ),
+        attributes: ["id"],
+      });
+
+      if (!categoriesWithTag || categoriesWithTag.length === 0) {
+        logger.info(
+          `Service: No categories found with tag: "${tag}" for Streams`
+        );
+        return {
+          streams: [],
+          totalItems: 0,
+          totalPages: 0,
+          currentPage: parseInt(page, 10),
+        };
+      }
+      const categoryIds = categoriesWithTag.map((cat) => cat.id);
+      whereClause.categoryId = { [Op.in]: categoryIds };
       logger.info(
-        `Service: No categories found with tag: "${tag}" for Streams`
+        `Service: Categories found for Streams with tag "${tag}": IDs ${categoryIds.join(
+          ", "
+        )}`
       );
-      return {
-        streams: [],
-        totalItems: 0,
-        totalPages: 0,
-        currentPage: parseInt(page, 10),
-      };
     }
 
-    const categoryIds = categoriesWithTag.map((cat) => cat.id);
-    logger.info(
-      `Service: Categories found for Streams with tag "${tag}": IDs ${categoryIds.join(
-        ", "
-      )}`
-    );
+    if (searchQuery) {
+      whereClause[Op.or] = [
+        { title: { [Op.iLike]: `%${searchQuery}%` } },
+        { description: { [Op.iLike]: `%${searchQuery}%` } },
+      ];
+    }
+
+    if (streamerUsername) {
+      // Cần đảm bảo 'user' alias đã được định nghĩa trong includeClauses
+      // và Sequelize có thể lọc dựa trên thuộc tính của model đã include.
+      // Cách tiếp cận này hoạt động nếu Sequelize hỗ trợ where trên include trực tiếp
+      // Hoặc có thể cần một sub-query hoặc cách tiếp cận khác nếu phức tạp hơn.
+      const userWhere = { username: { [Op.iLike]: `%${streamerUsername}%` } };
+      const userInclude = includeClauses.find((inc) => inc.as === "user");
+      if (userInclude) {
+        userInclude.where = userWhere;
+        userInclude.required = true; // Để đảm bảo chỉ trả về stream có user khớp
+      } else {
+        // Trường hợp này không nên xảy ra nếu cấu trúc include luôn có user
+        logger.warn(
+          "User include clause not found for streamerUsername search"
+        );
+      }
+    }
 
     const { count, rows } = await Stream.findAndCountAll({
-      where: {
-        categoryId: {
-          [Op.in]: categoryIds,
-        },
-        // Optionally filter by status, e.g., only 'live' streams
-        // status: 'live',
-      },
+      where: whereClause,
       limit: parseInt(limit, 10),
       offset: offset,
       order: [["createdAt", "DESC"]],
-      include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
-        {
-          model: Category,
-          as: "category",
-          attributes: ["id", "name", "slug", "tags"],
-        },
-      ],
-      distinct: true,
+      include: includeClauses,
+      distinct: true, // Quan trọng cho count khi dùng include
     });
 
-    logger.info(`Service: Found ${count} Streams for tag "${tag}"`);
+    logger.info(`Service: Found ${count} Streams matching criteria.`);
 
     return {
       streams: rows,
@@ -618,7 +645,7 @@ export const searchStreamsByTagService = async ({
       currentPage: parseInt(page, 10),
     };
   } catch (error) {
-    logger.error(`Service: Error searching Streams by tag "${tag}":`, error);
-    handleServiceError(error, "search Streams by tag"); // Ensure handleServiceError is robust
+    logger.error(`Service: Error searching Streams:`, error);
+    handleServiceError(error, "search Streams"); // Ensure handleServiceError is robust
   }
 };

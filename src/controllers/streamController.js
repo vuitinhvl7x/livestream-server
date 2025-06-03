@@ -3,7 +3,7 @@ import {
   updateStreamInfoService,
   getStreamsListService,
   getStreamDetailsService,
-  searchStreamsByTagService,
+  searchStreamsService,
 } from "../services/streamService.js";
 import { validationResult, matchedData } from "express-validator";
 import { v4 as uuidv4 } from "uuid";
@@ -294,7 +294,7 @@ export const getStreamById = async (req, res, next) => {
   }
 };
 
-export const searchStreamsByTag = async (req, res, next) => {
+export const searchStreams = async (req, res, next) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -304,27 +304,37 @@ export const searchStreamsByTag = async (req, res, next) => {
 
     const {
       tag,
+      searchQuery,
+      streamerUsername,
       page = 1,
       limit = 10,
     } = matchedData(req, { locations: ["query"] });
 
-    const result = await searchStreamsByTagService({
+    const searchCriteria = {
       tag,
+      searchQuery,
+      streamerUsername,
       page: parseInt(page, 10),
       limit: parseInt(limit, 10),
-    });
+    };
+
+    const result = await searchStreamsService(searchCriteria);
 
     res.status(200).json({
       success: true,
-      message: "Streams fetched successfully by tag",
+      message: "Streams fetched successfully based on search criteria",
+      searchCriteria: {
+        tag: tag || undefined,
+        query: searchQuery || undefined,
+        streamer: streamerUsername || undefined,
+      },
       totalItems: result.totalItems,
       totalPages: result.totalPages,
       currentPage: result.currentPage,
-      tagSearched: tag,
       streams: result.streams,
     });
   } catch (error) {
-    logger.error("Controller: Error searching streams by tag:", error);
+    logger.error("Controller: Error searching streams:", error);
     next(error);
   }
 };

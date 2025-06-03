@@ -16,6 +16,7 @@ import { spawn } from "child_process";
 import dotenv from "dotenv";
 import { Readable } from "stream";
 import { Op } from "sequelize";
+import { Sequelize } from "sequelize";
 
 dotenv.config();
 
@@ -541,6 +542,7 @@ const getVODs = async (options = {}) => {
       attributes: [
         "id",
         "title",
+        "description",
         "videoUrl",
         "thumbnailUrl",
         "thumbnailUrlExpiresAt",
@@ -963,83 +965,106 @@ const createVODFromUpload = async ({
 };
 
 /**
- * Search for VODs by a specific tag.
+ * Search for VODs by tag, searchQuery (title, description), and/or uploaderUsername.
  * @param {object} options
- * @param {string} options.tag - The tag to search for.
+ * @param {string} [options.tag] - The tag to search for.
+ * @param {string} [options.searchQuery] - Text to search in title and description.
+ * @param {string} [options.uploaderUsername] - Username of the VOD uploader.
  * @param {number} [options.page=1] - Current page for pagination.
  * @param {number} [options.limit=10] - Number of items per page.
  * @returns {Promise<{vods: VOD[], totalItems: number, totalPages: number, currentPage: number}>}
  */
-const searchVODsByTag = async ({ tag, page = 1, limit = 10 }) => {
+const searchVODs = async ({
+  tag,
+  searchQuery,
+  uploaderUsername,
+  page = 1,
+  limit = 10,
+}) => {
   try {
     logger.info(
-      `Service: Searching VODs with tag: "${tag}", page: ${page}, limit: ${limit}`
+      `Service: Searching VODs with tag: "${tag}", query: "${searchQuery}", user: "${uploaderUsername}", page: ${page}, limit: ${limit}`
     );
     const offset = (page - 1) * limit;
-
-    // 1. Find categories containing the tag
-    const categoriesWithTag = await Category.findAll({
-      where: {
-        tags: {
-          [Op.contains]: [tag], // PostgreSQL specific: checks if array contains the element
-        },
+    const whereClause = {}; // For VOD model
+    const includeClauses = [
+      { model: User, as: "user", attributes: ["id", "username"] },
+      {
+        model: Category,
+        as: "category",
+        attributes: ["id", "name", "slug", "tags"],
       },
-      attributes: ["id"], // Only need category IDs
-    });
+      // Không cần include Stream ở đây trừ khi có yêu cầu filter/search cụ thể liên quan đến Stream
+      // { model: Stream, as: "stream", attributes: ["id", "title"] },
+    ];
 
-    if (!categoriesWithTag || categoriesWithTag.length === 0) {
-      logger.info(`Service: No categories found with tag: "${tag}"`);
-      return {
-        vods: [],
-        totalItems: 0,
-        totalPages: 0,
-        currentPage: parseInt(page, 10),
-      };
+    if (tag) {
+      const lowercasedTag = tag.toLowerCase().replace(/'/g, "''");
+      // Tìm categories chứa tag (không phân biệt chữ hoa chữ thường)
+      const categoriesWithTag = await Category.findAll({
+        where: Sequelize.literal(
+          `EXISTS (SELECT 1 FROM unnest(tags) AS t(tag_element) WHERE LOWER(t.tag_element) = '${lowercasedTag}')`
+        ),
+        attributes: ["id"],
+      });
+
+      if (!categoriesWithTag || categoriesWithTag.length === 0) {
+        logger.info(`Service: No categories found with tag: "${tag}" for VODs`);
+        return {
+          vods: [],
+          totalItems: 0,
+          totalPages: 0,
+          currentPage: parseInt(page, 10),
+        };
+      }
+      const categoryIds = categoriesWithTag.map((cat) => cat.id);
+      whereClause.categoryId = { [Op.in]: categoryIds };
     }
 
-    const categoryIds = categoriesWithTag.map((cat) => cat.id);
-    logger.info(
-      `Service: Categories found with tag "${tag}": IDs ${categoryIds.join(
-        ", "
-      )}`
-    );
+    if (searchQuery) {
+      whereClause[Op.or] = [
+        { title: { [Op.iLike]: `%${searchQuery}%` } },
+        { description: { [Op.iLike]: `%${searchQuery}%` } },
+      ];
+    }
 
-    // 2. Find VODs belonging to these categories
+    if (uploaderUsername) {
+      const userWhere = { username: { [Op.iLike]: `%${uploaderUsername}%` } };
+      const userInclude = includeClauses.find((inc) => inc.as === "user");
+      if (userInclude) {
+        userInclude.where = userWhere;
+        userInclude.required = true; // Quan trọng: chỉ trả về VODs có user khớp
+      } else {
+        // Điều này không nên xảy ra nếu include User luôn được thêm vào
+        logger.warn(
+          "User include clause not found for uploaderUsername VOD search"
+        );
+      }
+    }
+
     const { count, rows } = await VOD.findAndCountAll({
-      where: {
-        categoryId: {
-          [Op.in]: categoryIds,
-        },
-      },
+      where: whereClause,
       limit,
       offset,
       order: [["createdAt", "DESC"]],
       attributes: [
-        // Define attributes to return, similar to getVODs
         "id",
         "title",
         "videoUrl",
         "thumbnailUrl",
+        "thumbnailUrlExpiresAt",
         "durationSeconds",
         "createdAt",
         "userId",
         "categoryId",
-        // Ensure these are included if your VOD model has them and they are relevant
         "urlExpiresAt",
-        "thumbnailUrlExpiresAt",
+        // Thêm các trường khác nếu cần thiết cho hiển thị kết quả tìm kiếm
       ],
-      include: [
-        // Include associated models as needed
-        { model: User, as: "user", attributes: ["id", "username"] },
-        {
-          model: Category,
-          as: "category",
-          attributes: ["id", "name", "slug", "tags"],
-        },
-      ],
+      include: includeClauses,
+      distinct: true, // Quan trọng cho count khi dùng include phức tạp
     });
 
-    logger.info(`Service: Found ${count} VODs for tag "${tag}"`);
+    logger.info(`Service: Found ${count} VODs matching criteria.`);
 
     return {
       vods: rows,
@@ -1048,8 +1073,11 @@ const searchVODsByTag = async ({ tag, page = 1, limit = 10 }) => {
       currentPage: parseInt(page, 10),
     };
   } catch (error) {
-    logger.error(`Service: Error searching VODs by tag "${tag}":`, error);
-    handleServiceError(error, "search VODs by tag");
+    logger.error(
+      `Service: Error searching VODs with tag "${tag}", query "${searchQuery}", user "${uploaderUsername}":`,
+      error
+    );
+    handleServiceError(error, "search VODs");
   }
 };
 
@@ -1061,5 +1089,5 @@ export const vodService = {
   deleteVOD,
   processRecordedFileToVOD,
   refreshVODUrl,
-  searchVODsByTag,
+  searchVODs,
 };

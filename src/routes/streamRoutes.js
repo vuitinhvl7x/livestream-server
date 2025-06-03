@@ -4,7 +4,7 @@ import {
   updateStream,
   getStreams,
   getStreamById,
-  searchStreamsByTag,
+  searchStreams,
 } from "../controllers/streamController.js";
 import authenticateToken from "../middlewares/authMiddleware.js";
 import upload from "../middlewares/uploadMiddleware.js";
@@ -13,9 +13,8 @@ import {
   validateUpdateStream,
   validateGetStreams,
   validateGetStreamById,
-  searchStreamsByTagParams,
+  validateStreamSearchParams,
 } from "../validators/streamValidators.js";
-
 
 const router = express.Router();
 
@@ -45,11 +44,7 @@ router.get("/", validateGetStreams, getStreams);
  * @desc    Tìm kiếm Streams theo tag.
  * @access  Public
  */
-router.get(
-  "/search",
-  searchStreamsByTagParams, // Validator cho query params
-  searchStreamsByTag
-);
+router.get("/search", validateStreamSearchParams, searchStreams);
 
 // GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
 router.get("/:streamId", validateGetStreamById, getStreamById);

@@ -124,13 +124,22 @@ const getVODsList = [
   // Bạn có thể thêm sortBy, sortOrder ở đây nếu muốn validate chúng chặt chẽ hơn
 ];
 
-const searchVodsByTagParams = [
+export const validateVodSearchParams = [
   query("tag")
-    .trim()
-    .notEmpty()
-    .withMessage("Search tag cannot be empty.")
+    .optional({ checkFalsy: true })
     .isString()
-    .withMessage("Search tag must be a string."),
+    .withMessage("Search tag must be a string if provided.")
+    .trim(),
+  query("searchQuery")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Search query must be a string."),
+  query("uploaderUsername")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Uploader username must be a string."),
   query("page")
     .optional()
     .isInt({ gt: 0 })
@@ -141,11 +150,27 @@ const searchVodsByTagParams = [
     .isInt({ gt: 0 })
     .withMessage("Limit must be a positive integer")
     .toInt(),
+  (req, res, next) => {
+    const { tag, searchQuery, uploaderUsername } = req.query;
+    if (!tag && !searchQuery && !uploaderUsername) {
+      return res.status(400).json({
+        errors: [
+          {
+            type: "query",
+            msg: "At least one search criteria (tag, searchQuery, or uploaderUsername) must be provided.",
+            path: "query",
+            location: "query",
+          },
+        ],
+      });
+    }
+    next();
+  },
 ];
 
 export const vodValidationRules = {
   manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
   uploadLocalVOD,
   getVODsList, // Thêm validator mới
-  searchVodsByTagParams, // Thêm validator cho tìm kiếm theo tag
+  validateVodSearchParams, // Đổi tên và cập nhật
 };

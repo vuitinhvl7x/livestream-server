@@ -80,13 +80,22 @@ export const validateGetStreamById = [
     .toInt(),
 ];
 
-export const searchStreamsByTagParams = [
+export const validateStreamSearchParams = [
   query("tag")
-    .trim()
-    .notEmpty()
-    .withMessage("Search tag cannot be empty.")
+    .optional({ checkFalsy: true })
     .isString()
-    .withMessage("Search tag must be a string."),
+    .withMessage("Search tag must be a string if provided.")
+    .trim(),
+  query("searchQuery")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Search query must be a string."),
+  query("streamerUsername")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Streamer username must be a string."),
   query("page")
     .optional()
     .isInt({ gt: 0 })
@@ -97,4 +106,20 @@ export const searchStreamsByTagParams = [
     .isInt({ gt: 0 })
     .withMessage("Limit must be a positive integer")
     .toInt(),
+  (req, res, next) => {
+    const { tag, searchQuery, streamerUsername } = req.query;
+    if (!tag && !searchQuery && !streamerUsername) {
+      return res.status(400).json({
+        errors: [
+          {
+            type: "query",
+            msg: "At least one search criteria (tag, searchQuery, or streamerUsername) must be provided.",
+            path: "query",
+            location: "query",
+          },
+        ],
+      });
+    }
+    next();
+  },
 ];

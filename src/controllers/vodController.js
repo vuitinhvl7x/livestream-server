@@ -334,7 +334,7 @@ const uploadLocalVODFile = async (req, res, next) => {
   }
 };
 
-const searchVODsByTag = async (req, res, next) => {
+const searchVODs = async (req, res, next) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -344,25 +344,36 @@ const searchVODsByTag = async (req, res, next) => {
 
     const {
       tag,
+      searchQuery,
+      uploaderUsername,
       page = 1,
       limit = 10,
     } = matchedData(req, { locations: ["query"] });
 
-    const result = await vodService.searchVODsByTag({
+    const searchCriteria = {
       tag,
+      searchQuery,
+      uploaderUsername,
       page: parseInt(page, 10),
       limit: parseInt(limit, 10),
-    });
+    };
+
+    const result = await vodService.searchVODs(searchCriteria);
 
     res.status(200).json({
       success: true,
+      message: "VODs fetched successfully based on search criteria",
+      searchCriteria: {
+        tag: tag || undefined,
+        query: searchQuery || undefined,
+        uploader: uploaderUsername || undefined,
+      },
       data: result.vods,
       pagination: {
         totalItems: result.totalItems,
         totalPages: result.totalPages,
         currentPage: result.currentPage,
         limit: parseInt(limit, 10),
-        tagSearched: tag, // Optionally include the tag searched for
       },
     });
   } catch (error) {
@@ -377,5 +388,5 @@ export const vodController = {
   getVODDetails,
   removeVOD,
   refreshVODSignedUrl,
-  searchVODsByTag,
+  searchVODs,
 };
