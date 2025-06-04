@@ -3,6 +3,8 @@ import User from "./user.js";
 import Stream from "./stream.js";
 import VOD from "./vod.js";
 import Category from "./category.js";
+import Follow from "./follow.js";
+import Notification from "./notification.js";
 
 // --- Định nghĩa Associations ---
 
@@ -61,6 +63,33 @@ VOD.belongsTo(Category, {
   as: "category",
 });
 
+// --- Associations cho Follow và Notification (theo task.md) ---
+
+// User <-> Follow
+User.hasMany(Follow, {
+  foreignKey: "followerId",
+  as: "followers",
+  onDelete: "CASCADE",
+});
+User.hasMany(Follow, {
+  foreignKey: "followingId",
+  as: "following",
+  onDelete: "CASCADE",
+});
+Follow.belongsTo(User, { foreignKey: "followerId", as: "follower" });
+Follow.belongsTo(User, { foreignKey: "followingId", as: "following" });
+
+// User <-> Notification
+User.hasMany(Notification, {
+  foreignKey: "userId",
+  as: "notifications",
+  onDelete: "CASCADE",
+});
+Notification.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
 // --- Export Models và Sequelize Instance ---
 
-export { sequelize, User, Stream, VOD, Category };
+export { sequelize, User, Stream, VOD, Category, Follow, Notification };
