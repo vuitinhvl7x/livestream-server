@@ -137,6 +137,10 @@
           disconnectBtn.disabled = false;
           joinRoomBtn.disabled = false;
           // sendMessageBtn is enabled after joining a room
+
+          // Join notification room
+          addLog("Attempting to join notification room...", "log");
+          socket.emit("join_notification_room");
         });
 
         socket.on("connect_error", (err) => {
@@ -212,6 +216,18 @@
               "Chat and actions for this room have been disabled because the stream ended.",
               "error"
             );
+          }
+        });
+
+        // Listener for new notifications
+        socket.on("new_notification", (notification) => {
+          addLog(
+            `NEW NOTIFICATION: ${notification.message} (Type: ${notification.type}, Read: ${notification.isRead})`,
+            "received"
+          );
+          // Optionally, you can add more details like actorUsername if available
+          if (notification.actorUsername) {
+            addLog(`  Actor: ${notification.actorUsername}`, "received");
           }
         });
 

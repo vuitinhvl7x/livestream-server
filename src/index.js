@@ -12,9 +12,12 @@ import webhookRoutes from "./routes/webhookRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
 import vodRoutes from "./routes/vodRoutes.js";
 import initializeSocketHandlers from "./socketHandlers.js";
+import { setIoInstance as setNotificationServiceIo } from "./services/notificationService.js";
 // Import category routes
 import categoryRoutes from "./routes/categoryRoutes.js";
 import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
+import followRoutes from "./routes/followRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 
 dotenv.config();
 
@@ -31,6 +34,8 @@ const io = new Server(server, {
   },
 });
 
+setNotificationServiceIo(io);
+
 // Middleware
 app.use(
   cors({
@@ -43,10 +48,12 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Routes
 app.use("/api/users", userRoutes);
+app.use("/api/social", followRoutes);
 app.use("/api/streams", streamRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/vod", vodRoutes);
+app.use("/api/notifications", notificationRoutes);
 // Add category routes
 app.use("/api/categories", categoryRoutes);
 app.use("/api/admin/categories", categoryAdminRoutes);

@@ -303,3 +303,29 @@ export const getUserProfileById = async (userId) => {
     );
   }
 };
+
+export const getAllUsers = async () => {
+  try {
+    const users = await User.findAll({
+      attributes: [
+        "id",
+        "username",
+        "displayName",
+        "avatarUrl",
+        "avatarUrlExpiresAt",
+        "bio",
+        "role",
+        "createdAt",
+        "updatedAt",
+      ],
+    });
+    // Optionally, you can implement logic to refresh avatarUrls here if needed, similar to getUserProfileById
+    return users;
+  } catch (error) {
+    logger.error("Service: Error in getAllUsers:", error);
+    throw new AppError(
+      `Could not retrieve users: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};

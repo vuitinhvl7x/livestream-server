@@ -13,15 +13,10 @@ import path from "path"; // Added for path manipulation
 import dotenv from "dotenv";
 import redisClient from "../lib/redis.js"; // Import Redis client
 import appEmitter from "../utils/appEvents.js"; // Import App Emitter
+import notificationService from "./notificationService.js"; // THÊM IMPORT
+import logger from "../utils/logger.js"; // Đảm bảo logger được import
 
 dotenv.config();
-
-const logger = {
-  // Basic logger
-  info: console.log,
-  error: console.error,
-  warn: console.warn,
-};
 
 const LIVE_VIEWER_COUNT_KEY_PREFIX = "stream:live_viewers:";
 const LIVE_VIEWER_TTL_SECONDS =
@@ -588,11 +583,13 @@ export const getStreamDetailsService = async (streamId) => {
  */
 export const markLive = async (streamKey) => {
   try {
-    const stream = await Stream.findOne({ where: { streamKey } });
+    const stream = await Stream.findOne({
+      where: { streamKey },
+      include: [{ model: User, as: "user", attributes: ["id", "username"] }], // Include User để lấy thông tin actor
+    });
 
     if (!stream) {
       logger.error(`markLive: Stream với key ${streamKey} không tồn tại.`);
-      // Ném lỗi để RTMP server hoặc phía gọi có thể xử lý
       throw new AppError(
         `Stream với key ${streamKey} không tồn tại. Không thể bắt đầu buổi phát.`,
         404
@@ -605,11 +602,11 @@ export const markLive = async (streamKey) => {
       );
       throw new AppError(
         `Stream key ${streamKey} đã được sử dụng và đã kết thúc. Vui lòng tạo một stream mới để tiếp tục.`,
-        403 // Forbidden
+        403
       );
     }
 
-    // Xác định startTime: nếu stream đã có startTime (ví dụ đang live, reconnect) thì giữ nguyên, nếu chưa thì là new Date()
+    const oldStatus = stream.status;
     const newStartTime = stream.startTime || new Date();
 
     const [updatedRows] = await Stream.update(
@@ -617,7 +614,7 @@ export const markLive = async (streamKey) => {
         status: "live",
         startTime: newStartTime,
         endTime: null,
-        viewerCount: 0,
+        viewerCount: 0, // Reset viewer count in DB when going live
       },
       { where: { streamKey } }
     );
@@ -627,15 +624,47 @@ export const markLive = async (streamKey) => {
       logger.info(
         `Stream ${streamKey} marked as live. Viewer count reset in DB and Redis.`
       );
+
+      // Chỉ gửi thông báo nếu stream chuyển từ trạng thái không phải 'live' sang 'live'
+      if (oldStatus !== "live") {
+        // Gửi thông báo cho followers
+        if (stream.user) {
+          // stream.user đã được include
+          logger.info(
+            `Stream ${streamKey} is now live, preparing to notify followers of user ${stream.user.username} (ID: ${stream.user.id})`
+          );
+          notificationService
+            .notifyFollowers(
+              stream.user, // actorUser (User object)
+              "stream_started", // actionType
+              stream, // entity (Stream object, có id và title)
+              (followerUsername, actorUsername, entityTitle) =>
+                `${actorUsername} has started streaming: ${
+                  entityTitle || "Live Stream"
+                }!`
+            )
+            .catch((err) => {
+              // Bắt lỗi ở đây để việc gửi thông báo không làm crash luồng chính
+              logger.error(
+                `Failed to notify followers for stream ${streamKey} (user: ${stream.user.id}):`,
+                err
+              );
+            });
+        } else {
+          logger.warn(
+            `Cannot send stream_started notification for stream ${streamKey} because user info is missing.`
+          );
+        }
+      }
     } else {
-      // Trường hợp này ít khi xảy ra nếu stream đã được tìm thấy ở trên và không có lỗi
       logger.warn(
         `markLive: Stream với key ${streamKey} không tìm thấy để cập nhật hoặc không có thay đổi cần thiết.`
       );
     }
   } catch (error) {
-    console.error(`Error in markLive for stream ${streamKey}:`, error);
-    throw new Error("Failed to mark stream as live: " + error.message);
+    logger.error(`Error in markLive for stream ${streamKey}:`, error);
+    if (error instanceof AppError) throw error;
+    throw new AppError("Failed to mark stream as live: " + error.message, 500);
   }
 };
 

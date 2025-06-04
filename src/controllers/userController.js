@@ -4,6 +4,7 @@ import {
   loginUser,
   updateUserProfile,
   getUserProfileById,
+  getAllUsers,
 } from "../services/userService.js";
 
 export const register = async (req, res) => {
@@ -111,6 +112,16 @@ export const getMyProfile = async (req, res) => {
     res.status(200).json(userProfile);
   } catch (error) {
     // Nếu service ném AppError, nó sẽ có statusCode
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
+  }
+};
+
+export const getAllUsersController = async (req, res) => {
+  try {
+    const users = await getAllUsers();
+    res.status(200).json(users);
+  } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ error: error.message });
   }

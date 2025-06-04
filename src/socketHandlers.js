@@ -100,6 +100,26 @@ const initializeSocketHandlers = (io) => {
       `User connected: ${socket.id}, UserInfo: ${socket.user?.username}`
     );
 
+    // Sự kiện để tham gia phòng notification cá nhân
+    socket.on("join_notification_room", () => {
+      if (socket.user && socket.user.id) {
+        const userId = socket.user.id.toString();
+        const notificationRoom = `notification:${userId}`;
+        socket.join(notificationRoom);
+        logger.info(
+          `User ${socket.user.username} (${socket.id}) joined notification room: ${notificationRoom}`
+        );
+        socket.emit("notification_room_joined", { room: notificationRoom });
+      } else {
+        logger.warn(
+          `User ${socket.id} tried to join notification room without valid user context.`
+        );
+        socket.emit("notification_room_join_error", {
+          message: "Authentication required to join notification room.",
+        });
+      }
+    });
+
     socket.on("join_stream_room", async (data) => {
       const { streamId } = data;
       const roomId = streamId?.toString();

@@ -9,6 +9,7 @@ import {
   login,
   updateProfile,
   getMyProfile,
+  getAllUsersController,
 } from "../controllers/userController.js";
 import authenticateToken from "../middlewares/authMiddleware.js";
 import upload from "../middlewares/uploadMiddleware.js";
@@ -21,6 +22,11 @@ router.post("/login", validateUserLogin, login);
 
 // Protected routes (require authentication)
 router.get("/me", authenticateToken, getMyProfile);
+router.get(
+  "/all",
+  // authenticateToken,
+  getAllUsersController
+);
 
 router.put(
   "/me/profile",

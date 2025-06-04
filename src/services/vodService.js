@@ -18,13 +18,10 @@ import { Readable } from "stream";
 import { Op } from "sequelize";
 import { Sequelize } from "sequelize";
 import redisClient from "../lib/redis.js";
+import notificationService from "./notificationService.js";
+import logger from "../utils/logger.js";
 
 dotenv.config();
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
 
 // Cache để lưu trữ lượt xem gần đây (vodId -> Map(userIdOrIp -> timestamp))
 // const recentViewsCache = new Map(); // Loại bỏ cache Map trong bộ nhớ
@@ -638,7 +635,6 @@ const createVOD = async (vodData) => {
       categoryId: vodData.categoryId,
     });
 
-    // Kiểm tra các trường bắt buộc cơ bản
     if (
       !vodData.userId ||
       !vodData.title ||
@@ -653,7 +649,6 @@ const createVOD = async (vodData) => {
       );
     }
 
-    // Kiểm tra Category nếu categoryId được cung cấp
     if (vodData.categoryId) {
       const category = await Category.findByPk(vodData.categoryId);
       if (!category) {
@@ -669,32 +664,59 @@ const createVOD = async (vodData) => {
       title: vodData.title,
       description: vodData.description,
       videoUrl: vodData.videoUrl,
-      urlExpiresAt: new Date(vodData.urlExpiresAt), // Đảm bảo là Date object
+      urlExpiresAt: new Date(vodData.urlExpiresAt),
       b2FileId: vodData.b2FileId,
       b2FileName: vodData.b2FileName,
       durationSeconds: vodData.durationSeconds || 0,
-
-      // Các trường thumbnail mới, cho phép null nếu không có thumbnail
       thumbnailUrl: vodData.thumbnailUrl || null,
       thumbnailUrlExpiresAt: vodData.thumbnailUrlExpiresAt
         ? new Date(vodData.thumbnailUrlExpiresAt)
         : null,
       b2ThumbnailFileId: vodData.b2ThumbnailFileId || null,
       b2ThumbnailFileName: vodData.b2ThumbnailFileName || null,
-
-      // Các trường tùy chọn liên quan đến stream
       streamId: vodData.streamId || null,
       streamKey: vodData.streamKey || null,
       categoryId: vodData.categoryId || null,
     });
 
     logger.info(`VOD created successfully with ID: ${newVOD.id}`);
+
+    // Gửi thông báo cho followers
+    if (newVOD.userId) {
+      const actorUser = await User.findByPk(newVOD.userId, {
+        attributes: ["id", "username"],
+      });
+      if (actorUser) {
+        logger.info(
+          `New VOD created (ID: ${newVOD.id}), preparing to notify followers of user ${actorUser.username} (ID: ${actorUser.id})`
+        );
+        notificationService
+          .notifyFollowers(
+            actorUser, // actorUser (User object)
+            "new_vod", // actionType
+            newVOD, // entity (VOD object, có id và title)
+            (followerUsername, actorUsername, entityTitle) =>
+              `${actorUsername} has published a new VOD: ${
+                entityTitle || "New Video"
+              }!`
+          )
+          .catch((err) => {
+            logger.error(
+              `Failed to notify followers for new VOD ${newVOD.id} (user: ${actorUser.id}):`,
+              err
+            );
+          });
+      } else {
+        logger.warn(
+          `Cannot send new_vod notification for VOD ${newVOD.id} because creator user (ID: ${newVOD.userId}) not found.`
+        );
+      }
+    }
+
     return newVOD;
   } catch (error) {
-    // Bọc lỗi bằng handleServiceError để chuẩn hóa
-    // throw handleServiceError(error, "Failed to create VOD in service");
-    // Để đơn giản, tạm thời re-throw lỗi gốc để controller xử lý và log chi tiết hơn
     logger.error("Error in vodService.createVOD:", error);
+    // Giữ nguyên throw error để các hàm gọi (processRecordedFileToVOD, createVODFromUpload) có thể xử lý cleanup nếu cần
     throw error;
   }
 };
