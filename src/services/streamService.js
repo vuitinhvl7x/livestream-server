@@ -226,11 +226,11 @@ export const updateStreamInfoService = async (
     const stream = await Stream.findByPk(streamId);
 
     if (!stream) {
-      throw new AppError("Stream not found", 404);
+      throw new AppError("Stream không tìm thấy", 404);
     }
 
     if (stream.userId !== currentUserId) {
-      throw new AppError("User not authorized to update this stream", 403);
+      throw new AppError("Người dùng không có quyền cập nhật stream này", 403);
     }
 
     const {
@@ -243,7 +243,7 @@ export const updateStreamInfoService = async (
       categoryId,
     } = updateData;
 
-    // Lưu lại thông tin thumbnail cũ để xóa nếu upload thumbnail mới thành công
+    const oldStatus = stream.status;
     const oldB2ThumbnailFileId = stream.b2ThumbnailFileId;
     const oldB2ThumbnailFileName = stream.b2ThumbnailFileName;
     let newThumbnailB2Response = null;
@@ -312,38 +312,65 @@ export const updateStreamInfoService = async (
 
     // Cập nhật categoryId
     if (categoryId !== undefined) {
-      // Cho phép cả việc gán null
       if (categoryId === null) {
         stream.categoryId = null;
       } else {
         const category = await Category.findByPk(categoryId);
         if (!category) {
-          throw new AppError(`Category with ID ${categoryId} not found.`, 400);
+          throw new AppError(
+            `Category với ID ${categoryId} không tìm thấy.`,
+            400
+          );
         }
         stream.categoryId = categoryId;
       }
     }
 
-    if (status !== undefined && ["live", "ended"].includes(status)) {
-      // Logic cập nhật status, startTime, endTime tương tự như trước
-      // (đã có trong file của bạn, có thể copy/paste hoặc giữ nguyên nếu nó đúng)
-      const oldStatus = stream.status;
-      if (stream.status !== status) {
-        stream.status = status;
-        if (status === "live") {
-          if (oldStatus === "ended" || !stream.startTime) {
-            stream.startTime = new Date();
-            stream.endTime = null;
-          }
-        } else if (status === "ended") {
-          if (oldStatus === "live" && !stream.endTime) {
+    // Xử lý cập nhật status
+    if (status !== undefined && status !== oldStatus) {
+      if (status === "live") {
+        if (stream.endTime) {
+          // Nếu stream đã có endTime (đã kết thúc vĩnh viễn)
+          throw new AppError(
+            "Buổi phát trực tiếp này đã kết thúc vĩnh viễn. Để phát lại, vui lòng tạo một buổi phát mới.",
+            400
+          );
+        }
+        stream.status = "live";
+        // Giữ startTime cũ nếu stream đã từng live và startTime còn đó (ví dụ, đang 'ended' tạm thời mà chưa có endTime),
+        // hoặc set mới nếu stream chưa từng live hoặc startTime là null.
+        stream.startTime = stream.startTime || new Date();
+        stream.endTime = null;
+        // Việc reset viewerCount/Redis sẽ do markLive từ RTMP đảm nhiệm khi stream thực sự bắt đầu.
+      } else if (status === "ended") {
+        // Nếu user chủ động set là 'ended' qua API
+        if (oldStatus === "live") {
+          // Chỉ thực hiện nếu đang từ 'live' chuyển sang và chưa có endTime
+          stream.status = "ended";
+          stream.endTime = new Date(); // Set endTime mới
+          // Lưu ý: Hành động này từ API chỉ cập nhật DB.
+          // Các tác vụ dọn dẹp (Redis, emit event) nên được xử lý bởi `markEnded` khi RTMP ngắt kết nối.
+        } else {
+          // Nếu stream đang không phải 'live' (ví dụ, 'ended' sẵn rồi, hoặc trạng thái không xác định)
+          // và user muốn set là 'ended' -> đảm bảo nó là 'ended' và có endTime nếu chưa có.
+          stream.status = "ended";
+          if (!stream.endTime) {
             stream.endTime = new Date();
           }
         }
+      } else {
+        throw new AppError(
+          `Giá trị trạng thái '${status}' không hợp lệ. Chỉ chấp nhận 'live' hoặc 'ended'.`,
+          400
+        );
       }
-    } else if (status !== undefined) {
+    } else if (status === "live" && oldStatus === "live" && stream.endTime) {
+      // Trường hợp người dùng gửi status="live", stream trên DB cũng là "live"
+      // NHƯNG stream.endTime lại có giá trị. Đây là mâu thuẫn logic.
+      // Stream không thể vừa "live" vừa có "endTime".
+      // Nên ném lỗi để chỉ ra rằng stream này thực sự đã kết thúc.
       throw new AppError(
-        "Invalid status value. Must be 'live' or 'ended'.",
+        "Buổi phát trực tiếp này đã kết thúc (do có endTime). Không thể đặt lại thành 'live'. Vui lòng tạo buổi phát mới.",
         400
       );
     }
@@ -561,18 +588,49 @@ export const getStreamDetailsService = async (streamId) => {
  */
 export const markLive = async (streamKey) => {
   try {
+    const stream = await Stream.findOne({ where: { streamKey } });
+
+    if (!stream) {
+      logger.error(`markLive: Stream với key ${streamKey} không tồn tại.`);
+      // Ném lỗi để RTMP server hoặc phía gọi có thể xử lý
+      throw new AppError(
+        `Stream với key ${streamKey} không tồn tại. Không thể bắt đầu buổi phát.`,
+        404
+      );
+    }
+
+    if (stream.endTime) {
+      logger.warn(
+        `markLive: Từ chối cố gắng tái sử dụng stream key ${streamKey} đã kết thúc.`
+      );
+      throw new AppError(
+        `Stream key ${streamKey} đã được sử dụng và đã kết thúc. Vui lòng tạo một stream mới để tiếp tục.`,
+        403 // Forbidden
+      );
+    }
+
+    // Xác định startTime: nếu stream đã có startTime (ví dụ đang live, reconnect) thì giữ nguyên, nếu chưa thì là new Date()
+    const newStartTime = stream.startTime || new Date();
+
     const [updatedRows] = await Stream.update(
-      { status: "live", startTime: new Date(), endTime: null, viewerCount: 0 },
+      {
+        status: "live",
+        startTime: newStartTime,
+        endTime: null,
+        viewerCount: 0,
+      },
       { where: { streamKey } }
     );
+
     if (updatedRows > 0) {
       await resetLiveViewerCount(streamKey);
       logger.info(
         `Stream ${streamKey} marked as live. Viewer count reset in DB and Redis.`
       );
     } else {
+      // Trường hợp này ít khi xảy ra nếu stream đã được tìm thấy ở trên và không có lỗi
       logger.warn(
-        `markLive: Stream with key ${streamKey} not found or no change needed.`
+        `markLive: Stream với key ${streamKey} không tìm thấy để cập nhật hoặc không có thay đổi cần thiết.`
       );
     }
   } catch (error) {

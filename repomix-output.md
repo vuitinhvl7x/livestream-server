@@ -39,10 +39,13 @@ The content is organized as follows:
 # Directory Structure
 ```
 migrations/20250601000000-create-vods.js
-migrations/create-users.js
+migrations/20250601233824-add-categoryId-to-vods-table.js
 models/index.js
+scripts/assignAdmin.js
+seeders/20250602000312-initial-categories.js
 src/config/database.js
 src/config/mongodb.js
+src/controllers/categoryController.js
 src/controllers/chatController.js
 src/controllers/streamController.js
 src/controllers/userController.js
@@ -50,25 +53,33 @@ src/controllers/vodController.js
 src/controllers/webhookController.js
 src/index.js
 src/lib/b2.service.js
+src/lib/redis.js
+src/middlewares/adminCheckMiddleware.js
 src/middlewares/authMiddleware.js
 src/middlewares/uploadMiddleware.js
+src/models/category.js
 src/models/index.js
 src/models/mongo/ChatMessage.js
 src/models/stream.js
 src/models/user.js
 src/models/vod.js
+src/routes/admin/categoryAdminRoutes.js
+src/routes/categoryRoutes.js
 src/routes/chatRoutes.js
 src/routes/streamRoutes.js
 src/routes/userRoutes.js
 src/routes/vodRoutes.js
 src/routes/webhookRoutes.js
+src/services/categoryService.js
 src/services/chatService.js
 src/services/streamService.js
 src/services/userService.js
 src/services/vodService.js
 src/socketHandlers.js
+src/utils/appEvents.js
 src/utils/errorHandler.js
 src/utils/videoUtils.js
+src/validators/categoryValidators.js
 src/validators/streamValidators.js
 src/validators/userValidators.js
 src/validators/vodValidator.js
@@ -145,42 +156,73 @@ export default {
 };
 ```
 
-## File: migrations/create-users.js
+## File: seeders/20250602000312-initial-categories.js
 ```javascript
 "use strict";
 
+import slugify from "slugify";
+
 /** @type {import('sequelize-cli').Migration} */
-module.exports = {
+export default {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable("Users", {
-      id: {
-        allowNull: false,
-        autoIncrement: true,
-        primaryKey: true,
-        type: Sequelize.INTEGER,
+    const categoriesData = [
+      {
+        name: "Gaming",
+        slug: slugify("Gaming", {
+          lower: true,
+          strict: true,
+          remove: /[*+~.()\'"!:@]/g,
+        }),
+        description: "All about video games and eSports.",
+        thumbnailUrl:
+          "https://via.placeholder.com/150/0000FF/808080?Text=Gaming",
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
-      username: {
-        type: Sequelize.STRING,
-        allowNull: false,
-        unique: true,
+      {
+        name: "Music",
+        slug: slugify("Music", {
+          lower: true,
+          strict: true,
+          remove: /[*+~.()\'"!:@]/g,
+        }),
+        description: "Live music performances, DJ sets, and more.",
+        thumbnailUrl:
+          "https://via.placeholder.com/150/FF0000/FFFFFF?Text=Music",
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
-      password: {
-        type: Sequelize.STRING,
-        allowNull: false,
+      {
+        name: "Dota 2",
+        slug: slugify("Dota 2", {
+          lower: true,
+          strict: true,
+          remove: /[*+~.()\'"!:@]/g,
+        }),
+        description: "The battlefield of the Ancients awaits.",
+        thumbnailUrl:
+          "https://via.placeholder.com/150/008000/FFFFFF?Text=Dota+2",
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
-      createdAt: {
-        allowNull: false,
-        type: Sequelize.DATE,
+      {
+        name: "Just Chatting",
+        slug: slugify("Just Chatting", {
+          lower: true,
+          strict: true,
+          remove: /[*+~.()\'"!:@]/g,
+        }),
+        description: "Hang out, talk, and connect with the community.",
+        thumbnailUrl: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
-      updatedAt: {
-        allowNull: false,
-        type: Sequelize.DATE,
-      },
-    });
+    ];
+    await queryInterface.bulkInsert("Categories", categoriesData, {});
   },
 
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable("Users");
+    await queryInterface.bulkDelete("Categories", null, {});
   },
 };
 ```
@@ -269,51 +311,69 @@ export const getChatHistory = async (req, res) => {
 };
 ```
 
-## File: src/models/index.js
+## File: src/lib/redis.js
 ```javascript
-import sequelize from "../config/database.js";
-import User from "./user.js";
-import Stream from "./stream.js";
-import VOD from "./vod.js";
+import Redis from "ioredis";
+import dotenv from "dotenv";
 
-// --- Định nghĩa Associations ---
+dotenv.config();
 
-// User <-> Stream (One-to-Many)
-User.hasMany(Stream, {
-  foreignKey: "userId",
-  as: "streams",
-  onDelete: "CASCADE",
-});
-Stream.belongsTo(User, {
-  foreignKey: "userId",
-  as: "user",
+const redisClient = new Redis({
+  host: process.env.REDIS_HOST || "127.0.0.1",
+  port: process.env.REDIS_PORT || 6379,
+  password: process.env.REDIS_PASSWORD || undefined,
+  maxRetriesPerRequest: 3, // Optional: configure retry strategy
+  enableReadyCheck: true,
 });
 
-// User <-> VOD (One-to-Many)
-User.hasMany(VOD, {
-  foreignKey: "userId",
-  as: "vods",
-  onDelete: "CASCADE",
-});
-VOD.belongsTo(User, {
-  foreignKey: "userId",
-  as: "user",
+redisClient.on("connect", () => {
+  console.log("Connected to Redis successfully!");
 });
 
-// Stream <-> VOD (One-to-Many)
-Stream.hasMany(VOD, {
-  foreignKey: "streamId",
-  as: "vods",
-  onDelete: "CASCADE",
-});
-VOD.belongsTo(Stream, {
-  foreignKey: "streamId",
-  as: "stream",
+redisClient.on("error", (err) => {
+  console.error("Could not connect to Redis:", err);
+  // Cân nhắc việc xử lý lỗi ở đây, ví dụ: thoát ứng dụng hoặc chạy ở chế độ không cache
 });
 
-// --- Export Models và Sequelize Instance ---
+export default redisClient;
+```
 
-export { sequelize, User, Stream, VOD };
+## File: src/middlewares/adminCheckMiddleware.js
+```javascript
+import { AppError } from "../utils/errorHandler.js"; // Optional: for consistent error handling
+
+/**
+ * Middleware to check if the authenticated user has admin privileges.
+ * Assumes `req.user` is populated by a preceding authentication middleware (e.g., authMiddleware)
+ * and that `req.user` object has a `role` property.
+ */
+export const adminCheckMiddleware = (req, res, next) => {
+  // Check if user object exists and has a role property
+  if (req.user && req.user.role) {
+    if (req.user.role === "admin") {
+      // User is an admin, proceed to the next middleware or route handler
+      next();
+    } else {
+      // User is authenticated but not an admin
+      // You can use AppError or send a direct response
+      // return next(new AppError("Forbidden: Admin access required.", 403));
+      return res
+        .status(403)
+        .json({ success: false, message: "Forbidden: Admin access required." });
+    }
+  } else {
+    // req.user is not populated or doesn't have a role,
+    // which implies an issue with the authMiddleware or JWT payload
+    // This case should ideally be caught by authMiddleware, but as a safeguard:
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: User role not found or authentication issue.",
+    });
+  }
+};
+
+// If you prefer to export it as default:
+// export default adminCheckMiddleware;
 ```
 
 ## File: src/models/mongo/ChatMessage.js
@@ -352,30 +412,49 @@ const ChatMessage =
 export default ChatMessage;
 ```
 
-## File: src/models/user.js
+## File: src/routes/admin/categoryAdminRoutes.js
 ```javascript
-import { DataTypes } from "sequelize";
-import sequelize from "../config/database.js";
+import express from "express";
+import * as categoryController from "../../controllers/categoryController.js";
+import {
+  validateCreateCategory,
+  validateUpdateCategory,
+  validateGetCategoryParams,
+} from "../../validators/categoryValidators.js";
+import authMiddleware from "../../middlewares/authMiddleware.js";
+import { adminCheckMiddleware } from "../../middlewares/adminCheckMiddleware.js";
+import upload from "../../middlewares/uploadMiddleware.js";
 
-const User = sequelize.define(
-  "User",
-  {
-    username: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-    },
-    password: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-  },
-  {
-    timestamps: true,
-  }
+const router = express.Router();
+
+// All routes in this file are protected by authMiddleware and adminCheckMiddleware
+router.use(authMiddleware);
+router.use(adminCheckMiddleware);
+
+router.post(
+  "/",
+  upload.single("thumbnailFile"), // Middleware for single file upload
+  validateCreateCategory,
+  categoryController.createCategory
 );
 
-export default User;
+router.put(
+  "/:categoryIdOrSlug",
+  upload.single("thumbnailFile"),
+  validateUpdateCategory,
+  categoryController.updateCategory
+);
+
+router.delete(
+  "/:categoryIdOrSlug",
+  validateGetCategoryParams, // Just to validate param format
+  categoryController.deleteCategory
+);
+
+// Admin can also use the public GET routes, but they are defined in categoryRoutes.js
+// If admin needs a special version of GET, define it here.
+
+export default router;
 ```
 
 ## File: src/routes/chatRoutes.js
@@ -472,128 +551,13 @@ export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
 };
 ```
 
-## File: src/socketHandlers.js
+## File: src/utils/appEvents.js
 ```javascript
-import jwt from "jsonwebtoken";
-// import mongoose from "mongoose"; // Không cần trực tiếp nữa
-import dotenv from "dotenv";
-import { saveChatMessage } from "./services/chatService.js"; 
+import EventEmitter from "events";
 
-dotenv.config();
+const appEmitter = new EventEmitter();
 
-const JWT_SECRET = process.env.JWT_SECRET;
-// const MONGODB_URI = process.env.MONGODB_URI; // Không cần trực tiếp nữa
-
-// Kết nối MongoDB đã chuyển sang src/config/mongodb.js và gọi ở src/index.js
-
-// Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
-// const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
-
-const initializeSocketHandlers = (io) => {
-  // Middleware xác thực JWT cho Socket.IO
-  io.use((socket, next) => {
-    const token = socket.handshake.auth.token; // Client gửi token qua socket.handshake.auth
-    if (!token) {
-      return next(new Error("Authentication error: Token not provided"));
-    }
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
-      if (err) {
-        console.error("Socket JWT verification error:", err.message);
-        return next(new Error("Authentication error: Invalid token"));
-      }
-      socket.user = decoded; // Gán thông tin user vào socket
-      next();
-    });
-  });
-
-  io.on("connection", (socket) => {
-    console.log(`User connected: ${socket.id}, UserInfo:`, socket.user);
-
-    socket.on("join_stream_room", (streamId) => {
-      if (!streamId) {
-        console.warn(
-          `User ${socket.user.username} (${socket.id}) tried to join null/undefined streamId`
-        );
-        // Có thể gửi lại lỗi cho client
-        // socket.emit('error_joining_room', { message: 'Stream ID is required.' });
-        return;
-      }
-      socket.join(streamId);
-      console.log(
-        `User ${socket.user.username} (${socket.id}) joined room: ${streamId}`
-      );
-      // Thông báo cho những người khác trong phòng (tùy chọn)
-      // socket.to(streamId).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
-    });
-
-    socket.on("chat_message", async (data) => {
-      const { streamId, message } = data;
-      if (!streamId || !message) {
-        console.warn(
-          "Received chat_message with missing streamId or message:",
-          data
-        );
-        // socket.emit('error_sending_message', { message: 'Stream ID and message are required.' });
-        return;
-      }
-
-      if (!socket.rooms.has(streamId)) {
-        console.warn(
-          `User ${socket.user.username} (${socket.id}) sent message to room ${streamId} they are not in.`
-        );
-        // Có thể join họ vào phòng nếu đó là ý đồ, hoặc báo lỗi
-        // Hoặc đơn giản là không xử lý nếu user không ở trong phòng đó
-        // socket.emit('error_sending_message', { message: \`You are not in room ${streamId}.\` });
-        return;
-      }
-
-      try {
-        // Gọi service để lưu tin nhắn
-        const savedMessage = await saveChatMessage({
-          streamId,
-          userId: socket.user.id,
-          username: socket.user.username,
-          message,
-        });
-
-        // Broadcast tin nhắn đến tất cả client trong phòng (bao gồm cả người gửi)
-        io.to(streamId).emit("new_message", {
-          userId: savedMessage.userId, // Sử dụng dữ liệu từ tin nhắn đã lưu/xử lý
-          username: savedMessage.username,
-          message: savedMessage.message,
-          timestamp: savedMessage.timestamp, // Gửi timestamp từ server (sau khi lưu)
-          streamId: savedMessage.streamId,
-        });
-      } catch (error) {
-        console.error("Error saving or broadcasting chat message:", error);
-        // Có thể gửi lỗi về cho client gửi
-        // socket.emit('error_sending_message', { message: 'Could not process your message.' });
-      }
-    });
-
-    socket.on("leave_stream_room", (streamId) => {
-      if (streamId && socket.rooms.has(streamId)) {
-        socket.leave(streamId);
-        console.log(
-          `User ${socket.user.username} (${socket.id}) left room: ${streamId}`
-        );
-        // Thông báo cho những người khác trong phòng (tùy chọn)
-        // socket.to(streamId).emit('user_left_chat', { username: socket.user.username, message: 'has left the chat.' });
-      }
-    });
-
-    socket.on("disconnect", () => {
-      console.log(
-        `User disconnected: ${socket.id}, UserInfo:`,
-        socket.user?.username
-      );
-      // Tự động rời khỏi các phòng khi ngắt kết nối
-      // Socket.IO tự xử lý việc này, nhưng bạn có thể thêm logic tùy chỉnh nếu cần
-    });
-  });
-};
-
-export default initializeSocketHandlers;
+export default appEmitter;
 ```
 
 ## File: src/utils/errorHandler.js
@@ -632,123 +596,84 @@ const handleServiceError = (error, contextMessage) => {
 export { AppError, handleServiceError };
 ```
 
-## File: src/validators/streamValidators.js
+## File: migrations/20250601233824-add-categoryId-to-vods-table.js
 ```javascript
-import { body, param, query } from "express-validator";
+"use strict";
 
-export const validateCreateStream = [
-  body("title")
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ min: 3, max: 255 })
-    .withMessage("Title must be a string between 3 and 255 characters"),
-  body("description")
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ max: 1000 })
-    .withMessage(
-      "Description must be a string with a maximum of 1000 characters"
-    ),
-];
+/** @type {import('sequelize-cli').Migration} */
+export default {
+  async up(queryInterface, Sequelize) {
+    await queryInterface.addColumn("VODs", "categoryId", {
+      type: Sequelize.INTEGER,
+      allowNull: true,
+      references: {
+        model: "Categories",
+        key: "id",
+      },
+      onUpdate: "CASCADE",
+      onDelete: "SET NULL",
+    });
+  },
 
-export const validateUpdateStream = [
-  param("streamId")
-    .isInt({ gt: 0 })
-    .withMessage("Stream ID must be a positive integer"),
-  body("title")
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ min: 3, max: 255 })
-    .withMessage("Title must be a string between 3 and 255 characters"),
-  body("description")
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ max: 1000 })
-    .withMessage(
-      "Description must be a string with a maximum of 1000 characters"
-    ),
-  body("status")
-    .optional()
-    .isIn(["live", "ended"])
-    .withMessage("Status must be either 'live' or 'ended'"),
-];
-
-export const validateGetStreams = [
-  query("status")
-    .optional()
-    .isIn(["live", "ended"])
-    .withMessage("Status must be either 'live' or 'ended'"),
-  query("page")
-    .optional()
-    .isInt({ gt: 0 })
-    .withMessage("Page must be a positive integer")
-    .toInt(), // Chuyển đổi thành số nguyên
-  query("limit")
-    .optional()
-    .isInt({ gt: 0 })
-    .withMessage("Limit must be a positive integer")
-    .toInt(), // Chuyển đổi thành số nguyên
-];
-
-export const validateGetStreamById = [
-  param("streamId")
-    .isInt({ gt: 0 })
-    .withMessage("Stream ID must be a positive integer")
-    .toInt(), // Chuyển đổi thành số nguyên
-];
+  async down(queryInterface, Sequelize) {
+    await queryInterface.removeColumn("VODs", "categoryId");
+  },
+};
 ```
 
-## File: src/validators/userValidators.js
+## File: scripts/assignAdmin.js
 ```javascript
-import { body } from "express-validator";
+// scripts/assignAdmin.js
+import { User } from "../src/models/index.js";
+import sequelize from "../src/config/database.js";
 
-export const validateUserRegistration = [
-  body("username")
-    .isString()
-    .notEmpty()
-    .withMessage("Username is required")
-    .isLength({ min: 3 })
-    .withMessage("Username must be at least 3 characters long"),
-  body("password")
-    .isString()
-    .isLength({ min: 6 })
-    .withMessage("Password must be at least 6 characters long"),
-];
+// !!! THAY ĐỔI USERNAME Ở ĐÂY !!!
+const usernameToMakeAdmin = "xuanhaiAdmin"; // <-- Thay thế bằng username của người dùng bạn muốn gán quyền admin
 
-export const validateUserLogin = [
-  body("username").isString().notEmpty().withMessage("Username is required"),
-  // Không cần isLength cho username khi login, chỉ cần tồn tại
-  body("password")
-    .isString()
-    .notEmpty() // Mật khẩu không được rỗng khi login
-    .withMessage("Password is required"),
-  // Không cần isLength cho password khi login, backend sẽ check hash
-];
+if (usernameToMakeAdmin === "YOUR_TARGET_USERNAME") {
+  console.error(
+    "Vui lòng cập nhật biến 'usernameToMakeAdmin' trong file scripts/assignAdmin.js với username thực tế."
+  );
+  process.exit(1);
+}
 
-// Hoặc nếu bạn muốn dùng chung một validator cho cả register và login
-// (như file userRoutes.js hiện tại đang làm):
-export const validateUserPayload = [
-  body("username")
-    .isString()
-    .bail() // Dừng nếu là non-string để các check sau không lỗi
-    .notEmpty()
-    .withMessage("Username is required")
-    .isLength({ min: 3 })
-    .withMessage(
-      "Username must be at least 3 characters long for registration. For login, only non-empty is checked by this rule if applied broadly."
-    ),
-  body("password")
-    .isString()
-    .bail()
-    .isLength({ min: 6 })
-    .withMessage(
-      "Password must be at least 6 characters long for registration. For login, only non-empty is checked if you use a simpler rule."
-    ),
-];
+const assignAdminRole = async () => {
+  console.log(
+    `Đang cố gắng gán vai trò 'admin' cho người dùng: ${usernameToMakeAdmin}`
+  );
+  try {
+    // Không cần sequelize.sync() ở đây nếu bạn đã chạy migrations
+    // await sequelize.sync();
+
+    const user = await User.findOne({
+      where: { username: usernameToMakeAdmin },
+    });
+
+    if (user) {
+      if (user.role === "admin") {
+        console.log(`Người dùng ${usernameToMakeAdmin} đã là admin.`);
+      } else {
+        user.role = "admin";
+        await user.save();
+        console.log(
+          `Người dùng ${usernameToMakeAdmin} đã được cập nhật vai trò thành công thành 'admin'.`
+        );
+      }
+    } else {
+      console.log(
+        `Không tìm thấy người dùng với username: ${usernameToMakeAdmin}.`
+      );
+    }
+  } catch (error) {
+    console.error("Lỗi khi gán vai trò admin:", error);
+  } finally {
+    console.log("Đang đóng kết nối cơ sở dữ liệu...");
+    await sequelize.close();
+    console.log("Đã đóng kết nối cơ sở dữ liệu.");
+  }
+};
+
+assignAdminRole();
 ```
 
 ## File: src/config/database.js
@@ -804,59 +729,6 @@ const sequelize = new Sequelize(
 );
 
 export default sequelize;
-```
-
-## File: src/controllers/userController.js
-```javascript
-import { validationResult } from "express-validator";
-import { registerUser, loginUser } from "../services/userService.js";
-
-export const register = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-    const { user, token } = await registerUser(username, password);
-
-    res.status(201).json({
-      message: "User registered successfully",
-      user: {
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt,
-      },
-      token,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-export const login = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-    const { user, token } = await loginUser(username, password);
-
-    res.status(200).json({
-      message: "Login successful",
-      user: {
-        id: user.id,
-        username: user.username,
-      },
-      token,
-    });
-  } catch (error) {
-    res.status(401).json({ error: error.message });
-  }
-};
 ```
 
 ## File: src/controllers/webhookController.js
@@ -1031,18 +903,441 @@ export async function handleStreamRecordDone(req, res) {
 }
 ```
 
-## File: src/routes/userRoutes.js
+## File: src/models/index.js
+```javascript
+import sequelize from "../config/database.js";
+import User from "./user.js";
+import Stream from "./stream.js";
+import VOD from "./vod.js";
+import Category from "./category.js";
+
+// --- Định nghĩa Associations ---
+
+// User <-> Stream (One-to-Many)
+User.hasMany(Stream, {
+  foreignKey: "userId",
+  as: "streams",
+  onDelete: "CASCADE",
+});
+Stream.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+// User <-> VOD (One-to-Many)
+User.hasMany(VOD, {
+  foreignKey: "userId",
+  as: "vods",
+  onDelete: "CASCADE",
+});
+VOD.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+// Stream <-> VOD (One-to-Many)
+Stream.hasMany(VOD, {
+  foreignKey: "streamId",
+  as: "vods",
+  onDelete: "CASCADE",
+});
+VOD.belongsTo(Stream, {
+  foreignKey: "streamId",
+  as: "stream",
+});
+
+// Category <-> Stream (One-to-Many)
+Category.hasMany(Stream, {
+  foreignKey: "categoryId",
+  as: "streams",
+  onDelete: "SET NULL",
+});
+Stream.belongsTo(Category, {
+  foreignKey: "categoryId",
+  as: "category",
+});
+
+// Category <-> VOD (One-to-Many)
+Category.hasMany(VOD, {
+  foreignKey: "categoryId",
+  as: "categoryVods",
+  onDelete: "SET NULL",
+});
+VOD.belongsTo(Category, {
+  foreignKey: "categoryId",
+  as: "category",
+});
+
+// --- Export Models và Sequelize Instance ---
+
+export { sequelize, User, Stream, VOD, Category };
+```
+
+## File: src/routes/categoryRoutes.js
 ```javascript
 import express from "express";
-import { register, login } from "../controllers/userController.js";
-import { validateUserPayload } from "../validators/userValidators.js";
+import * as categoryController from "../controllers/categoryController.js";
+import {
+  validateGetCategoriesQuery,
+  validateGetCategoryParams,
+  validateSearchCategoriesByTagParams,
+} from "../validators/categoryValidators.js";
+// import authMiddleware from "../middlewares/authMiddleware.js"; // Assuming you have this
 
 const router = express.Router();
 
-router.post("/register", validateUserPayload, register);
-router.post("/login", validateUserPayload, login);
+// Public routes
+router.get("/", validateGetCategoriesQuery, categoryController.getCategories);
+
+/**
+ * @route   GET /api/categories/search
+ * @desc    Tìm kiếm Categories theo tag.
+ * @access  Public
+ */
+router.get(
+  "/search",
+  validateSearchCategoriesByTagParams,
+  categoryController.searchCategoriesByTag
+);
+
+router.get(
+  "/:categoryIdOrSlug",
+  validateGetCategoryParams,
+  categoryController.getCategoryDetails
+);
+
+// Routes requiring authentication (e.g., if users can suggest categories or some other interaction)
+// router.post("/suggest", authMiddleware, ...categoryController.suggestCategory);
 
 export default router;
+```
+
+## File: src/socketHandlers.js
+```javascript
+import jwt from "jsonwebtoken";
+// import mongoose from "mongoose"; // Không cần trực tiếp nữa
+import dotenv from "dotenv";
+import {
+  saveChatMessage,
+  getChatHistoryByStreamId,
+} from "./services/chatService.js";
+import {
+  getStreamKeyAndStatusById,
+  incrementLiveViewerCount,
+  decrementLiveViewerCount,
+  // getLiveViewerCount, // Không cần trực tiếp ở đây nữa nếu viewer_count_updated gửi count
+} from "./services/streamService.js"; // Import stream service functions
+import appEmitter from "./utils/appEvents.js"; // Sửa đường dẫn import
+
+dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+// const MONGODB_URI = process.env.MONGODB_URI; // Không cần trực tiếp nữa
+
+// Kết nối MongoDB đã chuyển sang src/config/mongodb.js và gọi ở src/index.js
+
+// Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
+// const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
+
+const logger = {
+  info: console.log,
+  error: console.error,
+  warn: console.warn,
+}; // Basic logger
+
+const initializeSocketHandlers = (io) => {
+  // Middleware xác thực JWT cho Socket.IO
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token; // Client gửi token qua socket.handshake.auth
+    if (!token) {
+      return next(new Error("Authentication error: Token not provided"));
+    }
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+      if (err) {
+        logger.error("Socket JWT verification error:", err.message);
+        return next(new Error("Authentication error: Invalid token"));
+      }
+      socket.user = decoded; // Gán thông tin user vào socket
+      // Lưu trữ map của roomId (streamId) tới streamKey
+      socket.joinedStreamData = new Map(); // Map<roomIdString, streamKeyString>
+      next();
+    });
+  });
+
+  // Lắng nghe sự kiện stream kết thúc từ appEmitter
+  appEmitter.on("stream:ended", ({ streamId, streamKey }) => {
+    const roomId = streamId; // streamId đã là string từ emitter
+    logger.info(
+      `'stream:ended' event received in socketHandlers for roomId: ${roomId}, streamKey: ${streamKey}.`
+    );
+    // Thông báo cho tất cả client trong phòng rằng stream đã kết thúc
+    io.to(roomId).emit("stream_ended_notification", {
+      roomId: roomId,
+      message: `Stream ${streamKey} has ended. Chat is now disabled for this room.`,
+    });
+
+    // Buộc tất cả các socket trong phòng này rời khỏi phòng
+    // io.socketsLeave(roomId) không được khuyến khích trực tiếp, thay vào đó dùng io.in(roomId).disconnectSockets(true) (Socket.IO v4+)
+    // Hoặc lấy danh sách sockets và cho từng cái leave
+    const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
+    if (socketsInRoom) {
+      socketsInRoom.forEach((socketId) => {
+        const socketInstance = io.sockets.sockets.get(socketId);
+        if (socketInstance) {
+          socketInstance.leave(roomId);
+          // Xóa dữ liệu phòng đã join khỏi socket đó nếu cần, tuy nhiên sự kiện disconnect của socket đó sẽ tự xử lý joinedStreamData
+          logger.info(
+            `Socket ${socketId} forcefully left room ${roomId} because stream ended.`
+          );
+        }
+      });
+    } else {
+      logger.info(
+        `No sockets found in room ${roomId} to remove after stream ended.`
+      );
+    }
+    // Hoặc một cách đơn giản hơn nếu chỉ muốn họ không nhận thêm event từ phòng này và để client tự xử lý:
+    // io.in(roomId).emit('force_leave_room', { roomId }); // Client sẽ phải lắng nghe sự kiện này và tự gọi socket.leave
+    // Tuy nhiên, io.socketsLeave(roomId); hoặc lặp và gọi leave là cách server-side chủ động hơn.
+    // Với Socket.IO v4, cách tốt nhất là:
+    // io.in(roomId).disconnectSockets(true); // true để đóng kết nối ngầm
+    // Nếu bạn dùng io.socketsLeave, nó có thể không hoạt động như mong đợi trong mọi trường hợp.
+    // Sử dụng lặp qua các socket và .leave() là một cách an toàn hơn nếu io.socketsLeave() không hoạt động.
+
+    // Xem xét sử dụng io.in(roomId).disconnectSockets(true) cho Socket.IO v4+
+    // Dòng dưới đây sẽ cố gắng ngắt kết nối các client trong phòng đó.
+    // Điều này cũng sẽ kích hoạt sự kiện 'disconnect' trên từng client, nơi bạn đã có logic dọn dẹp.
+    io.in(roomId).disconnectSockets(true);
+    logger.info(`Attempted to disconnect sockets in room ${roomId}.`);
+  });
+
+  io.on("connection", (socket) => {
+    logger.info(
+      `User connected: ${socket.id}, UserInfo: ${socket.user?.username}`
+    );
+
+    socket.on("join_stream_room", async (data) => {
+      const { streamId } = data;
+      const roomId = streamId?.toString();
+
+      if (!roomId) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to join with null/undefined streamId`
+        );
+        socket.emit("room_join_error", { message: "Stream ID is required." });
+        return;
+      }
+
+      try {
+        const streamDetails = await getStreamKeyAndStatusById(streamId);
+
+        if (!streamDetails || !streamDetails.streamKey) {
+          logger.warn(
+            `Stream not found or streamKey missing for streamId ${roomId} when user ${socket.user.username} (${socket.id}) tried to join.`
+          );
+          socket.emit("room_join_error", { message: "Stream not found." });
+          return;
+        }
+
+        const { streamKey, status } = streamDetails;
+
+        if (status !== "live") {
+          logger.warn(
+            `User ${socket.user.username} (${socket.id}) tried to join stream ${streamKey} (ID: ${roomId}) which is not live (status: ${status}).`
+          );
+          socket.emit("room_join_error", { message: "Stream is not live." });
+          return;
+        }
+
+        socket.join(roomId); // Join phòng bằng streamId (roomId)
+        socket.joinedStreamData.set(roomId, streamKey); // Lưu lại mapping
+
+        logger.info(
+          `User ${socket.user.username} (${socket.id}) joined room (streamId): ${roomId} (maps to streamKey: ${streamKey})`
+        );
+
+        // Gửi lịch sử chat gần đây cho user vừa join
+        try {
+          const chatHistory = await getChatHistoryByStreamId(roomId, {
+            page: 1,
+            limit: 20,
+          }); // Lấy 20 tin nhắn gần nhất
+          if (
+            chatHistory &&
+            chatHistory.messages &&
+            chatHistory.messages.length > 0
+          ) {
+            socket.emit("recent_chat_history", {
+              streamId: roomId,
+              messages: chatHistory.messages,
+            });
+            logger.info(
+              `Sent recent chat history to ${socket.user.username} for room ${roomId} (${chatHistory.messages.length} messages).`
+            );
+          }
+        } catch (historyError) {
+          logger.error(
+            `Error fetching recent chat history for room ${roomId}:`,
+            historyError
+          );
+          // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công
+        }
+
+        const currentViewers = await incrementLiveViewerCount(streamKey);
+        if (currentViewers !== null) {
+          // Phát tới phòng có tên là roomId (streamId)
+          io.to(roomId).emit("viewer_count_updated", {
+            streamId: roomId, // hoặc streamKey tùy theo client muốn định danh thế nào
+            count: currentViewers,
+          });
+        }
+        socket.emit("room_joined_successfully", {
+          streamId: roomId,
+          streamKeyForDev: streamKey,
+        }); // Gửi streamId về cho client
+
+        // Optionally, fetch and send recent chat messages or notify others
+        // socket.to(streamKey).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
+      } catch (error) {
+        logger.error(
+          `Error during join_stream_room for streamId ${roomId} by user ${socket.user.username} (${socket.id}):`,
+          error
+        );
+        socket.emit("room_join_error", {
+          message: "Error joining stream. Please try again.",
+        });
+      }
+    });
+
+    socket.on("chat_message", async (data) => {
+      const { streamId, message } = data; // Client gửi streamId (có thể là số hoặc chuỗi)
+      const roomId = streamId?.toString(); // roomId chắc chắn là chuỗi, dùng cho tên phòng socket
+
+      if (!roomId || !message) {
+        logger.warn(
+          "Received chat_message with missing streamId or message:",
+          data
+        );
+        socket.emit("message_error", {
+          message: "Stream ID and message are required.",
+        });
+        return;
+      }
+
+      if (!socket.rooms.has(roomId)) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) sent message to room ${roomId} they are not in.`
+        );
+        socket.emit("message_error", {
+          message: `You are not in room ${roomId}.`,
+        });
+        return;
+      }
+
+      // Lấy streamKey từ map đã lưu nếu cần cho các mục đích khác (không cần cho saveChatMessage nếu nó dùng streamId)
+      // const streamKey = socket.joinedStreamData.get(roomId);
+
+      try {
+        const savedMessage = await saveChatMessage({
+          streamId: roomId, // LUÔN DÙNG roomId (là streamId.toString()) để đảm bảo là chuỗi cho MongoDB
+          userId: socket.user.id,
+          username: socket.user.username,
+          message,
+        });
+
+        // Broadcast tin nhắn đến tất cả client trong phòng streamId (roomId)
+        io.to(roomId).emit("new_message", {
+          userId: savedMessage.userId,
+          username: savedMessage.username,
+          message: savedMessage.message,
+          timestamp: savedMessage.timestamp,
+          streamId: roomId, // Trả về streamId (roomId) cho client
+        });
+      } catch (error) {
+        logger.error(
+          `Error saving or broadcasting chat message for room ${roomId}:`,
+          error
+        );
+        socket.emit("message_error", {
+          message: "Could not process your message.",
+        });
+      }
+    });
+
+    socket.on("leave_stream_room", async (data) => {
+      const { streamId } = data;
+      const roomId = streamId?.toString();
+      if (!roomId) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to leave with null/undefined streamId`
+        );
+        return;
+      }
+
+      const streamKey = socket.joinedStreamData.get(roomId); // Lấy streamKey từ map
+
+      if (socket.rooms.has(roomId)) {
+        socket.leave(roomId);
+        if (streamKey) {
+          socket.joinedStreamData.delete(roomId); // Xóa mapping
+          logger.info(
+            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId} (was mapped to streamKey: ${streamKey})`
+          );
+
+          const currentViewers = await decrementLiveViewerCount(streamKey);
+          if (currentViewers !== null) {
+            io.to(roomId).emit("viewer_count_updated", {
+              streamId: roomId,
+              count: currentViewers,
+            });
+          }
+        } else {
+          logger.warn(
+            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId}, but no streamKey was mapped. No Redis update.`
+          );
+        }
+      } else {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to leave room ${roomId} they were not in.`
+        );
+      }
+    });
+
+    socket.on("disconnect", async () => {
+      logger.info(
+        `User disconnected: ${socket.id}, UserInfo: ${socket.user?.username}. Cleaning up joined rooms.`
+      );
+      if (socket.joinedStreamData && socket.joinedStreamData.size > 0) {
+        for (const [roomId, streamKey] of socket.joinedStreamData.entries()) {
+          try {
+            logger.info(
+              `Processing disconnect for user ${socket.user?.username} from room (streamId): ${roomId} (mapped to streamKey: ${streamKey})`
+            );
+            const currentViewers = await decrementLiveViewerCount(streamKey);
+            if (currentViewers !== null) {
+              // Vẫn phát tới phòng dựa trên roomId (streamId)
+              io.to(roomId).emit("viewer_count_updated", {
+                streamId: roomId,
+                count: currentViewers,
+              });
+              logger.info(
+                `Sent viewer_count_updated to room ${roomId} after user ${socket.user?.username} disconnected. New count: ${currentViewers}`
+              );
+            }
+          } catch (error) {
+            logger.error(
+              `Error decrementing viewer count for streamKey ${streamKey} (room ${roomId}) on disconnect for user ${socket.user?.username}:`,
+              error
+            );
+          }
+        }
+        socket.joinedStreamData.clear();
+      }
+    });
+  });
+};
+
+export default initializeSocketHandlers;
 ```
 
 ## File: src/utils/videoUtils.js
@@ -1135,97 +1430,72 @@ export async function generateThumbnailFromVideo(
 }
 ```
 
-## File: src/validators/vodValidator.js
+## File: src/validators/userValidators.js
 ```javascript
-import { body, param } from "express-validator";
+import { body } from "express-validator";
 
-// Validator cho việc tạo/upload VOD thủ công bởi admin
-const manualUploadVOD = [
-  body("title")
-    .trim()
+export const validateUserRegistration = [
+  body("username")
+    .isString()
     .notEmpty()
-    .withMessage("Tiêu đề VOD không được để trống.")
-    .isLength({ min: 3, max: 255 })
-    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
-  body("description")
-    .optional()
-    .trim()
-    .isLength({ max: 5000 })
-    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
-
-  // Các trường này là bắt buộc khi upload thủ công VOD đã có trên B2
-  body("videoUrl")
-    .trim()
-    .notEmpty()
-    .withMessage("videoUrl (pre-signed URL từ B2) không được để trống.")
-    .isURL()
-    .withMessage("videoUrl phải là một URL hợp lệ."),
-  body("urlExpiresAt")
-    .notEmpty()
-    .withMessage(
-      "urlExpiresAt (thời điểm hết hạn của videoUrl) không được để trống."
-    )
-    .isISO8601()
-    .withMessage("urlExpiresAt phải là một ngày hợp lệ theo định dạng ISO8601.")
-    .toDate(), // Chuyển đổi thành Date object
-  body("b2FileId")
-    .trim()
-    .notEmpty()
-    .withMessage("b2FileId (ID file trên B2) không được để trống."),
-  body("b2FileName")
-    .trim()
-    .notEmpty()
-    .withMessage("b2FileName (tên file trên B2) không được để trống."),
-  body("durationSeconds")
-    .notEmpty()
-    .withMessage(
-      "durationSeconds (thời lượng video tính bằng giây) không được để trống."
-    )
-    .isInt({ gt: 0 })
-    .withMessage("durationSeconds phải là một số nguyên dương.")
-    .toInt(),
-
-  // Các trường tùy chọn
-  body("streamId")
-    .optional()
-    .isInt({ gt: 0 })
-    .withMessage("streamId (nếu có) phải là một số nguyên dương.")
-    .toInt(),
-  body("streamKey")
-    .optional()
-    .trim()
-    .notEmpty()
-    .withMessage("streamKey (nếu có) không được để trống."),
-  body("thumbnail")
-    .optional()
-    .trim()
-    .isURL()
-    .withMessage("Thumbnail (nếu có) phải là một URL hợp lệ."),
-  // userId sẽ được lấy từ token xác thực, không cần validate ở đây
+    .withMessage("Username is required")
+    .isLength({ min: 3 })
+    .withMessage("Username must be at least 3 characters long"),
+  body("password")
+    .isString()
+    .isLength({ min: 6 })
+    .withMessage("Password must be at least 6 characters long"),
 ];
 
-// Validator cho việc upload VOD từ file local
-const uploadLocalVOD = [
-  body("title")
-    .trim()
-    .notEmpty()
-    .withMessage("Tiêu đề VOD không được để trống.")
-    .isLength({ min: 3, max: 255 })
-    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
-  body("description")
-    .optional()
-    .trim()
-    .isLength({ max: 5000 })
-    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
-  // Các trường tùy chọn khác có thể thêm sau nếu cần
-  // File video sẽ được xử lý bởi multer, không cần validate ở đây
-  // streamId, streamKey, userId sẽ được xử lý trong controller
+export const validateUserLogin = [
+  body("username").isString().notEmpty().withMessage("Username is required"),
+  // Không cần isLength cho username khi login, chỉ cần tồn tại
+  body("password")
+    .isString()
+    .notEmpty() // Mật khẩu không được rỗng khi login
+    .withMessage("Password is required"),
+  // Không cần isLength cho password khi login, backend sẽ check hash
 ];
 
-export const vodValidationRules = {
-  manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
-  uploadLocalVOD,
-};
+// Hoặc nếu bạn muốn dùng chung một validator cho cả register và login
+// (như file userRoutes.js hiện tại đang làm):
+export const validateUserPayload = [
+  body("username")
+    .isString()
+    .bail() // Dừng nếu là non-string để các check sau không lỗi
+    .notEmpty()
+    .withMessage("Username is required")
+    .isLength({ min: 3 })
+    .withMessage(
+      "Username must be at least 3 characters long for registration. For login, only non-empty is checked by this rule if applied broadly."
+    ),
+  body("password")
+    .isString()
+    .bail()
+    .isLength({ min: 6 })
+    .withMessage(
+      "Password must be at least 6 characters long for registration. For login, only non-empty is checked if you use a simpler rule."
+    ),
+];
+
+export const validateUserProfileUpdate = [
+  body("displayName")
+    .optional()
+    .isString()
+    .withMessage("Display name must be a string")
+    .isLength({ min: 1, max: 50 })
+    .withMessage("Display name must be between 1 and 50 characters"),
+  body("avatarUrl")
+    .optional()
+    .isURL()
+    .withMessage("Avatar URL must be a valid URL"),
+  body("bio")
+    .optional()
+    .isString()
+    .withMessage("Bio must be a string")
+    .isLength({ max: 500 })
+    .withMessage("Bio can be at most 500 characters long"),
+];
 ```
 
 ## File: models/index.js
@@ -1378,244 +1648,256 @@ db.Sequelize = Sequelize;
 module.exports = db;
 ```
 
-## File: src/middlewares/authMiddleware.js
+## File: src/controllers/categoryController.js
 ```javascript
-import jwt from "jsonwebtoken";
-import dotenv from "dotenv";
+import {
+  createCategoryService,
+  updateCategoryService,
+  deleteCategoryService,
+  getCategoriesService,
+  getCategoryDetailsService,
+  searchCategoriesByTagService,
+} from "../services/categoryService.js";
+import { validationResult, matchedData } from "express-validator";
+import { AppError } from "../utils/errorHandler.js";
+import fs from "fs/promises";
 
-dotenv.config(); // Đảm bảo các biến môi trường từ .env được load
+const logger = {
+  info: console.log,
+  error: console.error,
+};
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  console.error("FATAL ERROR: JWT_SECRET is not defined in .env file.");
-  process.exit(1); // Thoát ứng dụng nếu JWT_SECRET không được cấu hình
-}
-
-/**
- * Middleware xác thực JWT.
- * Kiểm tra token từ header Authorization.
- * Nếu hợp lệ, giải mã và gán thông tin user vào req.user.
- * Nếu không hợp lệ hoặc không có, trả về lỗi 401 hoặc 403.
- */
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1]; // Lấy token từ "Bearer <token>"
-
-  if (!token) {
-    return res
-      .status(401)
-      .json({ message: "Access token is missing or invalid." });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      console.error("JWT verification error:", err.message);
-      if (err.name === "TokenExpiredError") {
-        return res.status(401).json({ message: "Access token expired." });
-      }
-      // Các lỗi khác như JsonWebTokenError (token không hợp lệ, chữ ký sai)
-      return res.status(403).json({ message: "Access token is not valid." });
+export const createCategory = async (req, res, next) => {
+  let thumbnailFilePathTemp = null;
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
     }
 
-    // Token hợp lệ, gán thông tin user đã giải mã vào req.user
-    // Payload của bạn khi tạo token cần chứa các thông tin này (ví dụ: id, username)
-    req.user = {
-      id: decoded.id,
-      username: decoded.username,
-      // Thêm các trường khác nếu có trong payload của token
+    const validatedData = matchedData(req);
+    const userIdForPath = req.user?.id; // Or some other logic for B2 path
+
+    const servicePayload = {
+      ...validatedData, // name, description, slug (optional), tags (optional)
+      thumbnailFilePath: req.file?.path,
+      originalThumbnailFileName: req.file?.originalname,
+      thumbnailMimeType: req.file?.mimetype,
+      userIdForPath: "_admin_created", // Example path segment for admin-created categories
     };
-    console.log("User authenticated via JWT:", req.user);
-    next();
-  });
+    if (req.file) thumbnailFilePathTemp = req.file.path;
+
+    const category = await createCategoryService(servicePayload);
+
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+      } catch (unlinkError) {
+        logger.error(
+          "Controller: Error deleting temp thumbnail after category creation:",
+          unlinkError
+        );
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Category created successfully",
+      data: category,
+    });
+  } catch (error) {
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+      } catch (e) {
+        logger.error("Cleanup error:", e);
+      }
+    }
+    next(error);
+  }
 };
 
-export default authenticateToken;
-
-// User for production stage
-// export function verifyWebhook(req, res, next) {
-//   const signature = req.headers["x-webhook-signature"];
-//   // Giả sử bạn sẽ lưu WEBHOOK_SECRET trong file .env
-//   if (!process.env.WEBHOOK_SECRET) {
-//     console.error("FATAL ERROR: WEBHOOK_SECRET is not defined in .env file.");
-//     return res.status(500).json({ message: "Webhook secret not configured." });
-//   }
-//   if (signature !== process.env.WEBHOOK_SECRET) {
-//     console.warn("Invalid webhook signature received:", signature);
-//     return res.status(401).json({ message: "Invalid webhook signature." });
-//   }
-//   next();
-// }
-
-export function verifyWebhookTokenInParam(req, res, next) {
-  const receivedToken = req.params.webhookToken;
-  const expectedToken = process.env.WEBHOOK_SECRET_TOKEN; 
-
-  if (!expectedToken) {
-    console.error(
-      "FATAL ERROR: WEBHOOK_SECRET_TOKEN is not defined in .env file."
-    );
-    return res
-      .status(500)
-      .json({ message: "Webhook secret token not configured on server." });
-  }
-
-  if (receivedToken === expectedToken) {
-    next();
-  } else {
-    console.warn("Invalid webhook token received in URL param:", receivedToken);
-    return res.status(403).json({ message: "Invalid webhook token." });
-  }
-}
-```
-
-## File: src/middlewares/uploadMiddleware.js
-```javascript
-import multer from "multer";
-import path from "path";
-import fs from "fs"; // Thêm fs để kiểm tra và tạo thư mục
-import dotenv from "dotenv"; // Thêm dotenv
-
-dotenv.config(); // Tải biến môi trường
-
-// Đọc đường dẫn thư mục tạm từ biến môi trường
-const tempUploadDir = process.env.TMP_UPLOAD_DIR;
-
-console.log(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
-
-// Đảm bảo thư mục uploads/tmp tồn tại
-if (!fs.existsSync(tempUploadDir)) {
+export const updateCategory = async (req, res, next) => {
+  let thumbnailFilePathTemp = null;
   try {
-    fs.mkdirSync(tempUploadDir, { recursive: true });
-    console.log(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
-  } catch (err) {
-    console.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
-    throw new Error(`Không thể tạo thư mục upload tạm: ${tempUploadDir}`);
-  }
-}
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
 
-// Cấu hình lưu trữ cho multer (lưu vào ổ đĩa)
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, tempUploadDir); // Thư mục lưu file tạm
-  },
-  filename: function (req, file, cb) {
-    // Tạo tên file duy nhất để tránh ghi đè, giữ lại phần extension
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(
-      null,
-      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
+    const { categoryIdOrSlug } = req.params;
+    const validatedData = matchedData(req);
+
+    const servicePayload = {
+      ...validatedData, // name, description, slug (optional), tags (optional)
+      thumbnailFilePath: req.file?.path,
+      originalThumbnailFileName: req.file?.originalname,
+      thumbnailMimeType: req.file?.mimetype,
+      userIdForPath: "_admin_updated",
+    };
+    if (req.file) thumbnailFilePathTemp = req.file.path;
+
+    const category = await updateCategoryService(
+      categoryIdOrSlug,
+      servicePayload
     );
-  },
-});
 
-// Hàm kiểm tra loại file (chỉ chấp nhận video và ảnh cho các field tương ứng)
-const fileFilter = (req, file, cb) => {
-  const allowedVideoMimeTypes = [
-    "video/mp4",
-    "video/mpeg",
-    "video/quicktime", // .mov
-    "video/x-msvideo", // .avi
-    "video/x-flv", // .flv
-    "video/webm",
-    "video/x-matroska", // .mkv
-  ];
-  const allowedImageMimeTypes = [
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-  ];
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+      } catch (e) {
+        logger.error("Cleanup error:", e);
+      }
+    }
 
-  if (
-    file.fieldname === "videoFile" &&
-    allowedVideoMimeTypes.includes(file.mimetype)
-  ) {
-    cb(null, true);
-  } else if (
-    file.fieldname === "thumbnailFile" &&
-    allowedImageMimeTypes.includes(file.mimetype)
-  ) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error(
-        `Định dạng file không hợp lệ cho field ${file.fieldname}. Kiểm tra lại các định dạng được chấp nhận.`
-      ),
-      false
-    );
+    res.status(200).json({
+      success: true,
+      message: "Category updated successfully",
+      data: category,
+    });
+  } catch (error) {
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+      } catch (e) {
+        logger.error("Cleanup error:", e);
+      }
+    }
+    next(error);
   }
 };
 
-const upload = multer({
-  storage: storage,
-  fileFilter: fileFilter,
-  limits: {
-    fileSize: 1024 * 1024 * 500, // Giới hạn kích thước file: 500MB
-  },
-});
+export const deleteCategory = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+    const { categoryIdOrSlug } = req.params;
+    await deleteCategoryService(categoryIdOrSlug);
+    res
+      .status(200)
+      .json({ success: true, message: "Category deleted successfully" });
+  } catch (error) {
+    next(error);
+  }
+};
 
-export default upload;
+export const getCategories = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+    const { page, limit } = matchedData(req, { locations: ["query"] });
+    const result = await getCategoriesService({ page, limit });
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCategoryDetails = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+    const { categoryIdOrSlug } = req.params;
+    const category = await getCategoryDetailsService(categoryIdOrSlug);
+    if (!category) {
+      throw new AppError("Category not found", 404);
+    }
+    res.status(200).json({ success: true, data: category });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const searchCategoriesByTag = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const {
+      tag,
+      page = 1,
+      limit = 10,
+    } = matchedData(req, { locations: ["query"] });
+
+    const result = await searchCategoriesByTagService({
+      tag,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Categories fetched successfully by tag",
+      totalItems: result.totalItems,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      tagSearched: tag,
+      categories: result.categories,
+    });
+  } catch (error) {
+    logger.error("Controller: Error searching categories by tag:", error);
+    next(error);
+  }
+};
 ```
 
-## File: src/models/stream.js
+## File: src/models/category.js
 ```javascript
 import { DataTypes } from "sequelize";
 import sequelize from "../config/database.js";
+import slugify from "slugify";
 
-const Stream = sequelize.define(
-  "Stream",
+const Category = sequelize.define(
+  "Category",
   {
     id: {
       type: DataTypes.INTEGER,
       autoIncrement: true,
       primaryKey: true,
     },
-    userId: {
-      type: DataTypes.INTEGER,
+    name: {
+      type: DataTypes.STRING,
       allowNull: false,
-      references: {
-        model: "Users", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
-        key: "id",
+      unique: {
+        name: "categories_name_unique",
+        msg: "Category name must be unique.",
+      },
+      validate: {
+        notEmpty: {
+          msg: "Category name cannot be empty.",
+        },
       },
     },
-    streamKey: {
+    slug: {
       type: DataTypes.STRING,
-      unique: true,
       allowNull: false,
-    },
-    title: {
-      type: DataTypes.STRING,
-      allowNull: true,
+      unique: {
+        name: "categories_slug_unique",
+        msg: "Category slug must be unique.",
+      },
     },
     description: {
       type: DataTypes.TEXT,
       allowNull: true,
     },
-    status: {
-      type: DataTypes.ENUM("live", "ended"),
-      defaultValue: "ended",
-      allowNull: false,
-    },
-    startTime: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    endTime: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    viewerCount: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-      allowNull: false,
-    },
     thumbnailUrl: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-    },
-    thumbnailUrlExpiresAt: {
-      type: DataTypes.DATE,
+      type: DataTypes.STRING,
       allowNull: true,
     },
     b2ThumbnailFileId: {
@@ -1626,109 +1908,115 @@ const Stream = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
-    // createdAt and updatedAt are handled by Sequelize timestamps: true
+    tags: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      allowNull: true,
+      defaultValue: [],
+    },
+    thumbnailUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // createdAt and updatedAt are managed by timestamps: true in options
   },
   {
-    timestamps: true, // Enable automatic createdAt and updatedAt fields
+    // Options
+    sequelize, // This is automatically passed if you define it on the sequelize instance globally, but good to be explicit
+    modelName: "Category", // Conventionally, modelName is singular and PascalCase
+    tableName: "Categories",
+    timestamps: true, // Sequelize will manage createdAt and updatedAt
+    hooks: {
+      beforeValidate: (category) => {
+        if (category.name && !category.slug) {
+          category.slug = slugify(category.name, {
+            lower: true,
+            strict: true,
+            remove: /[*+~.()'"!:@]/g,
+          });
+        } else if (category.slug) {
+          // Ensure slug is in correct format if provided directly
+          category.slug = slugify(category.slug, {
+            lower: true,
+            strict: true,
+            remove: /[*+~.()'"!:@]/g,
+          });
+        }
+      },
+      beforeUpdate: async (category) => {
+        if (category.changed("name")) {
+          category.slug = slugify(category.name, {
+            lower: true,
+            strict: true,
+            remove: /[*+~.()'"!:@]/g,
+          });
+        } else if (category.changed("slug") && category.slug) {
+          category.slug = slugify(category.slug, {
+            lower: true,
+            strict: true,
+            remove: /[*+~.()'"!:@]/g,
+          });
+        }
+      },
+    },
   }
 );
 
-export default Stream;
+export default Category;
 ```
 
-## File: src/routes/streamRoutes.js
+## File: src/models/user.js
 ```javascript
-import express from "express";
-import {
-  createStream,
-  updateStream,
-  getStreams,
-  getStreamById,
-} from "../controllers/streamController.js";
-import authenticateToken from "../middlewares/authMiddleware.js";
-import upload from "../middlewares/uploadMiddleware.js";
-import {
-  validateCreateStream,
-  validateUpdateStream,
-  validateGetStreams,
-  validateGetStreamById,
-} from "../validators/streamValidators.js";
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
 
-// Placeholder for JWT Authentication Middleware
-// In a real app, this would be imported from an auth middleware file
-// const authenticateToken = (req, res, next) => {
-//   // Example: Check for a token and verify it
-//   // For now, we'll simulate an authenticated user for development
-//   // IMPORTANT: Replace this with actual JWT authentication
-//   console.log("authenticateToken middleware called (placeholder)");
-//   if (
-//     req.headers.authorization &&
-//     req.headers.authorization.startsWith("Bearer ")
-//   ) {
-//     const token = req.headers.authorization.split(" ")[1];
-//     // In a real app, you would verify the token here
-//     // For placeholder: decode a dummy user ID if token is 'testtoken'
-//     if (token === "testtoken") {
-//       req.user = { id: 1, username: "testuser" }; // Dummy user
-//       console.log("Dummy user authenticated:", req.user);
-//     } else if (token === "testtoken2") {
-//       req.user = { id: 2, username: "anotheruser" }; // Dummy user 2
-//       console.log("Dummy user authenticated:", req.user);
-//     } else {
-//       // No actual validation, just a log for now if a token is present
-//       console.log("Token present, but no actual validation in placeholder.");
-//       // To simulate unauthenticated for other tokens, you could return 401 here.
-//       // For broader testing, let's allow it to pass through if any token is present.
-//       // req.user = { id: null }; // Or simply don't set req.user
-//     }
-//   } else {
-//     console.log("No authorization token found.");
-//     // To enforce authentication, you would return a 401 error here:
-//     // return res.status(401).json({ message: 'Authentication token required' });
-//   }
-//   next();
-// };
-
-const router = express.Router();
-
-// Validation middleware for creating a stream
-// const validateCreateStream = [ ... ];
-
-// Validation middleware for updating a stream
-// const validateUpdateStream = [ ... ];
-
-// Validation for getting streams (pagination, filtering)
-// const validateGetStreams = [ ... ];
-
-// Define routes
-// POST /api/streams - Tạo mới stream
-// Use upload.single('thumbnailFile') to handle a single file upload for the thumbnail
-// The field name in the form-data should be 'thumbnailFile'
-router.post(
-  "/",
-  authenticateToken,
-  upload.single("thumbnailFile"), // Handle thumbnail upload first
-  validateCreateStream, // Ensure validators can handle req.body with multipart/form-data
-  createStream
+const User = sequelize.define(
+  "User",
+  {
+    username: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true,
+    },
+    password: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    displayName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    avatarUrl: {
+      type: DataTypes.STRING, // URL to the avatar image (e.g., stored on B2)
+      allowNull: true,
+    },
+    avatarUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    b2AvatarFileId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    b2AvatarFileName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    bio: {
+      type: DataTypes.TEXT, // For longer text
+      allowNull: true,
+    },
+    role: {
+      type: DataTypes.ENUM("user", "admin"),
+      allowNull: false,
+      defaultValue: "user",
+    },
+  },
+  {
+    timestamps: true,
+  }
 );
 
-// PUT /api/streams/:streamId - Cập nhật stream
-// If you also want to allow thumbnail updates, this route would need similar upload middleware
-router.put(
-  "/:streamId",
-  authenticateToken,
-  upload.single("thumbnailFile"), // Handle optional thumbnail upload
-  validateUpdateStream, // Ensure validators can handle req.body with multipart/form-data
-  updateStream
-);
-
-// GET /api/streams - Lấy danh sách stream (không yêu cầu xác thực cho route này)
-router.get("/", validateGetStreams, getStreams);
-
-// GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
-router.get("/:streamId", validateGetStreamById, getStreamById);
-
-export default router;
+export default User;
 ```
 
 ## File: src/routes/webhookRoutes.js
@@ -1762,687 +2050,626 @@ router.post(
 export default router;
 ```
 
-## File: src/services/userService.js
+## File: src/services/categoryService.js
 ```javascript
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import { User } from "../models/index.js";
-
-const generateToken = (user) => {
-  return jwt.sign(
-    { id: user.id, username: user.username },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: "1h",
-    }
-  );
-};
-
-export const registerUser = async (username, password) => {
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      username,
-      password: hashedPassword,
-    });
-    const token = generateToken(user);
-    return { user, token };
-  } catch (error) {
-    throw new Error("Error registering user: " + error.message);
-  }
-};
-
-export const loginUser = async (username, password) => {
-  try {
-    const user = await User.findOne({ where: { username } });
-    if (!user) {
-      throw new Error("User not found");
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new Error("Invalid password");
-    }
-
-    const token = generateToken(user);
-    return { user, token };
-  } catch (error) {
-    throw new Error("Error logging in: " + error.message);
-  }
-};
-```
-
-## File: src/controllers/streamController.js
-```javascript
-import {
-  createStreamWithThumbnailService,
-  updateStreamInfoService,
-  getStreamsListService,
-  getStreamDetailsService,
-} from "../services/streamService.js";
-import { validationResult, matchedData } from "express-validator";
-import { v4 as uuidv4 } from "uuid";
-import { Stream, User } from "../models/index.js";
-import { AppError } from "../utils/errorHandler.js";
-import fs from "fs/promises";
-import path from "path";
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
-
-// Endpoint Tạo Mới Stream (with thumbnail upload)
-export const createStream = async (req, res, next) => {
-  let thumbnailFilePathTemp = null;
-
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      const firstError = errors.array({ onlyFirstError: true })[0];
-      if (req.file) {
-        await fs.unlink(req.file.path);
-      }
-      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
-    }
-
-    const validatedData = matchedData(req);
-    const userId = req.user?.id;
-
-    if (!userId) {
-      if (req.file) await fs.unlink(req.file.path);
-      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
-    }
-
-    const { title, description } = validatedData;
-    let thumbnailFile = null;
-
-    if (req.file && req.file.fieldname === "thumbnailFile") {
-      thumbnailFile = req.file;
-      thumbnailFilePathTemp = thumbnailFile.path;
-    }
-
-    const servicePayload = {
-      userId,
-      title,
-      description,
-      thumbnailFilePath: thumbnailFile?.path,
-      originalThumbnailFileName: thumbnailFile?.originalname,
-      thumbnailMimeType: thumbnailFile?.mimetype,
-    };
-
-    logger.info(
-      `Controller: Gọi createStreamWithThumbnailService với payload cho user: ${userId}`,
-      {
-        title: servicePayload.title,
-        hasThumbnail: !!servicePayload.thumbnailFilePath,
-      }
-    );
-
-    const newStream = await createStreamWithThumbnailService(servicePayload);
-
-    if (thumbnailFilePathTemp) {
-      try {
-        await fs.unlink(thumbnailFilePathTemp);
-        logger.info(
-          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
-        );
-        thumbnailFilePathTemp = null;
-      } catch (unlinkError) {
-        logger.error(
-          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp} sau khi service thành công: `,
-          unlinkError
-        );
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      message: "Stream created successfully",
-      data: newStream,
-    });
-  } catch (error) {
-    logger.error("Controller: Lỗi khi tạo stream:", error);
-    if (thumbnailFilePathTemp) {
-      try {
-        await fs.unlink(thumbnailFilePathTemp);
-        logger.info(
-          `Controller: Đã xóa file thumbnail tạm (trong catch): ${thumbnailFilePathTemp}`
-        );
-      } catch (unlinkError) {
-        logger.error(
-          `Controller: Lỗi khi xóa file thumbnail tạm (trong catch) ${thumbnailFilePathTemp}:`,
-          unlinkError
-        );
-      }
-    }
-    next(error);
-  }
-};
-
-// Endpoint Cập Nhật Thông Tin Stream
-export const updateStream = async (req, res, next) => {
-  let thumbnailFilePathTemp = null; // For cleaning up temp file
-
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      const firstError = errors.array({ onlyFirstError: true })[0];
-      if (req.file) {
-        // If validation fails after file upload
-        await fs.unlink(req.file.path);
-      }
-      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
-    }
-
-    const { streamId } = req.params;
-    const validatedData = matchedData(req); // title, description, status from body
-    const currentUserId = req.user?.id;
-
-    if (!currentUserId) {
-      if (req.file) await fs.unlink(req.file.path);
-      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
-    }
-
-    const id = parseInt(streamId);
-    if (isNaN(id)) {
-      if (req.file) await fs.unlink(req.file.path);
-      throw new AppError("Stream ID phải là một số.", 400);
-    }
-
-    let thumbnailFile = null;
-    if (req.file && req.file.fieldname === "thumbnailFile") {
-      thumbnailFile = req.file;
-      thumbnailFilePathTemp = thumbnailFile.path; // Lưu để xóa
-    }
-
-    const servicePayload = {
-      ...validatedData, // title, description, status
-      thumbnailFilePath: thumbnailFile?.path,
-      originalThumbnailFileName: thumbnailFile?.originalname,
-      thumbnailMimeType: thumbnailFile?.mimetype,
-    };
-
-    logger.info(
-      `Controller: Gọi updateStreamInfoService cho stream ${id} bởi user ${currentUserId}`,
-      {
-        updates: servicePayload.title, // just an example field to log
-        hasNewThumbnail: !!servicePayload.thumbnailFilePath,
-      }
-    );
-
-    const updatedStream = await updateStreamInfoService(
-      id,
-      currentUserId,
-      servicePayload
-    );
-
-    // Xóa file thumbnail tạm (nếu có) sau khi service thành công
-    if (thumbnailFilePathTemp) {
-      try {
-        await fs.unlink(thumbnailFilePathTemp);
-        logger.info(
-          `Controller: Đã xóa file thumbnail tạm (update): ${thumbnailFilePathTemp}`
-        );
-        thumbnailFilePathTemp = null; // Reset để không xóa lại trong finally/catch
-      } catch (unlinkError) {
-        logger.error(
-          `Controller: Lỗi khi xóa file thumbnail tạm (update) ${thumbnailFilePathTemp} sau khi service thành công: `,
-          unlinkError
-        );
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Stream updated successfully",
-      data: updatedStream, // Trả về stream đã được cập nhật, bao gồm cả thumbnail URL mới nếu có
-    });
-  } catch (error) {
-    logger.error("Controller: Lỗi khi cập nhật stream:", error);
-    // Đảm bảo file tạm được xóa nếu có lỗi
-    if (thumbnailFilePathTemp) {
-      try {
-        await fs.unlink(thumbnailFilePathTemp);
-        logger.info(
-          `Controller: Đã xóa file thumbnail tạm (update, trong catch): ${thumbnailFilePathTemp}`
-        );
-      } catch (unlinkError) {
-        logger.error(
-          `Controller: Lỗi khi xóa file thumbnail tạm (update, trong catch) ${thumbnailFilePathTemp}:`,
-          unlinkError
-        );
-      }
-    }
-    next(error); // Chuyển lỗi cho error handling middleware
-  }
-};
-
-// Endpoint Lấy Danh Sách Stream
-export const getStreams = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  try {
-    const { status, page, limit } = req.query;
-    const result = await getStreamsListService({ status, page, limit });
-
-    res.status(200).json({
-      message: "Streams fetched successfully",
-      totalStreams: result.totalStreams,
-      totalPages: result.totalPages,
-      currentPage: result.currentPage,
-      streams: result.streams.map((stream) => ({
-        id: stream.id,
-        title: stream.title,
-        description: stream.description,
-        status: stream.status,
-        startTime: stream.startTime,
-        endTime: stream.endTime,
-        viewerCount: stream.viewerCount,
-        thumbnailUrl: stream.thumbnailUrl,
-        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
-        user: stream.user,
-        createdAt: stream.createdAt,
-      })),
-    });
-  } catch (error) {
-    logger.error("Error in getStreams controller:", error);
-    res
-      .status(500)
-      .json({ message: "Error fetching streams", error: error.message });
-  }
-};
-
-// Endpoint Lấy Chi Tiết Một Stream
-export const getStreamById = async (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    const firstError = errors.array({ onlyFirstError: true })[0];
-    return next(new AppError(`Validation failed: ${firstError.msg}`, 400));
-  }
-
-  try {
-    const { streamId } = req.params;
-    const id = parseInt(streamId);
-    if (isNaN(id)) {
-      return next(new AppError("Stream ID must be a number.", 400));
-    }
-
-    const stream = await getStreamDetailsService(id);
-
-    if (!stream) {
-      return next(new AppError("Stream not found", 404));
-    }
-
-    res.status(200).json({
-      message: "Stream details fetched successfully",
-      stream: {
-        id: stream.id,
-        title: stream.title,
-        description: stream.description,
-        status: stream.status,
-        startTime: stream.startTime,
-        endTime: stream.endTime,
-        viewerCount: stream.viewerCount,
-        thumbnailUrl: stream.thumbnailUrl,
-        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
-        streamKey: stream.streamKey,
-        user: stream.user,
-        createdAt: stream.createdAt,
-        updatedAt: stream.updatedAt,
-      },
-    });
-  } catch (error) {
-    logger.error("Error in getStreamById controller:", error);
-    next(error);
-  }
-};
-```
-
-## File: src/controllers/vodController.js
-```javascript
-import { vodService } from "../services/vodService.js";
-import { AppError } from "../utils/errorHandler.js";
-import { matchedData, validationResult } from "express-validator"; // Sử dụng express-validator để validate
+import { Category, Stream, VOD } from "../models/index.js";
+import { AppError, handleServiceError } from "../utils/errorHandler.js";
 import {
   uploadToB2AndGetPresignedUrl,
-  generatePresignedUrlForExistingFile,
   deleteFileFromB2,
-} from "../lib/b2.service.js"; // Thêm import B2 service
-import {
-  getVideoDurationInSeconds,
-  generateThumbnailFromVideo,
-} from "../utils/videoUtils.js"; // Thêm generateThumbnailFromVideo
+  generatePresignedUrlForExistingFile,
+} from "../lib/b2.service.js";
+import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
-import fs from "fs/promises"; // Thêm fs để xóa file tạm
+import slugify from "slugify";
+import dotenv from "dotenv";
+import { Op } from "sequelize";
+
+dotenv.config();
 
 const logger = {
   info: console.log,
   error: console.error,
 };
 
+const B2_PRESIGNED_URL_DURATION_IMAGES =
+  parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+  3600 * 24 * 7; // 7 days default
+
 /**
- * @route   POST /api/vod/upload
- * @desc    (Admin/Manual Upload) Tạo một VOD mới. Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
- *          Endpoint này dành cho trường hợp upload thủ công, không qua luồng Nginx webhook.
- * @access  Private (Admin)
+ * Create a new category with an optional thumbnail.
+ * @param {object} data - Category data.
+ * @param {string} data.name - Category name.
+ * @param {string} [data.description] - Category description.
+ * @param {string} [data.slug] - Category slug (if provided, otherwise generated from name).
+ * @param {string[]} [data.tags] - Array of tags for the category.
+ * @param {string} [data.thumbnailFilePath] - Path to temporary thumbnail file.
+ * @param {string} [data.originalThumbnailFileName] - Original name of the thumbnail file.
+ * @param {string} [data.thumbnailMimeType] - Mime type of the thumbnail.
+ * @param {number} [data.userIdForPath] - User ID for B2 path, if applicable (e.g. "global_categories" or specific user).
+ * @returns {Promise<Category>} The created category object.
  */
-const uploadVOD = async (req, res, next) => {
+export const createCategoryService = async ({
+  name,
+  description,
+  slug,
+  tags,
+  thumbnailFilePath,
+  originalThumbnailFileName,
+  thumbnailMimeType,
+  userIdForPath = "_global", // Default path for general categories
+}) => {
+  let b2ThumbFileIdToDeleteOnError = null;
+  let b2ThumbFileNameToDeleteOnError = null;
+
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      const firstError = errors.array({ onlyFirstError: true })[0];
-      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    logger.info(`Service: Attempting to create category: ${name}`);
+
+    let thumbnailB2Response = null;
+
+    if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
+      logger.info(`Service: Thumbnail provided: ${thumbnailFilePath}`);
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      const thumbnailSize = thumbStats.size;
+
+      if (thumbnailSize > 0) {
+        const thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+        const safeOriginalThumbName = originalThumbnailFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const thumbnailFileNameInB2 = `categories/${userIdForPath}/thumbnails/${Date.now()}_${safeOriginalThumbName}`;
+
+        const b2Response = await uploadToB2AndGetPresignedUrl(
+          null, // videoStream
+          0, // videoSize
+          null, // videoFileNameInB2
+          null, // videoMimeType
+          thumbnailStream,
+          thumbnailSize,
+          thumbnailFileNameInB2,
+          thumbnailMimeType,
+          null, // durationSeconds (N/A for category thumbnail)
+          B2_PRESIGNED_URL_DURATION_IMAGES
+        );
+        thumbnailB2Response = b2Response.thumbnail;
+
+        if (!thumbnailB2Response || !thumbnailB2Response.url) {
+          throw new AppError("Failed to upload category thumbnail to B2.", 500);
+        }
+        b2ThumbFileIdToDeleteOnError = thumbnailB2Response.b2FileId;
+        b2ThumbFileNameToDeleteOnError = thumbnailB2Response.b2FileName;
+        logger.info(
+          `Service: Category thumbnail uploaded to B2: ${thumbnailB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn("Service: Provided category thumbnail file is empty.");
+      }
     }
 
-    const validatedData = matchedData(req);
-    const userId = req.user?.id; // req.user được gán bởi authMiddleware
+    const categoryData = {
+      name,
+      description: description || null,
+      slug:
+        slug ||
+        slugify(name, {
+          lower: true,
+          strict: true,
+          remove: /[*+~.()\'\"!:@]/g,
+        }),
+      tags: tags || [],
+      thumbnailUrl: thumbnailB2Response?.url || null,
+      thumbnailUrlExpiresAt: thumbnailB2Response?.urlExpiresAt || null,
+      b2ThumbnailFileId: thumbnailB2Response?.b2FileId || null,
+      b2ThumbnailFileName: thumbnailB2Response?.b2FileName || null,
+    };
 
-    if (!userId) {
-      // Hoặc kiểm tra role admin ở đây nếu endpoint này chỉ cho admin
+    const newCategory = await Category.create(categoryData);
+    logger.info(`Service: Category created in DB with ID: ${newCategory.id}`);
+    return newCategory;
+  } catch (error) {
+    logger.error("Service: Error in createCategoryService:", error);
+    if (b2ThumbFileIdToDeleteOnError && b2ThumbFileNameToDeleteOnError) {
+      try {
+        logger.warn(
+          `Service: Cleaning up B2 thumbnail ${b2ThumbFileNameToDeleteOnError} due to error.`
+        );
+        await deleteFileFromB2(
+          b2ThumbFileNameToDeleteOnError,
+          b2ThumbFileIdToDeleteOnError
+        );
+      } catch (deleteError) {
+        logger.error(
+          "Service: Critical error during B2 thumbnail cleanup:",
+          deleteError
+        );
+      }
+    }
+    if (error.name === "SequelizeUniqueConstraintError") {
       throw new AppError(
-        "Xác thực thất bại hoặc userId không được cung cấp.",
-        401
+        `Category with this name or slug already exists.`,
+        409
       );
     }
-
-    // Dữ liệu cần thiết cho upload thủ công:
-    const {
-      streamId, // Tùy chọn, nhưng nên có nếu liên kết với stream cũ
-      streamKey, // Tùy chọn
-      title,
-      description,
-      videoUrl, // Pre-signed URL đã có
-      urlExpiresAt, // Thời điểm URL hết hạn
-      b2FileId, // ID file trên B2
-      b2FileName, // Tên file trên B2
-      thumbnail, // URL thumbnail (có thể cũng là pre-signed)
-      durationSeconds, // Thời lượng video
-    } = validatedData;
-
-    // Service createVOD đã được cập nhật để xử lý các trường này
-    const newVOD = await vodService.createVOD({
-      userId,
-      streamId,
-      streamKey,
-      title,
-      description,
-      videoUrl,
-      urlExpiresAt: new Date(urlExpiresAt), // Chuyển đổi sang Date object nếu cần
-      b2FileId,
-      b2FileName,
-      thumbnail,
-      durationSeconds,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "VOD đã được tạo thành công (thủ công).",
-      data: newVOD,
-    });
-  } catch (error) {
-    next(error); // Chuyển lỗi cho error handling middleware
+    handleServiceError(error, "create category");
   }
 };
 
 /**
- * @route   GET /api/vod
- * @desc    Lấy danh sách VOD, hỗ trợ filter và phân trang.
- * @access  Public (hoặc Private tùy theo yêu cầu)
+ * Update an existing category.
+ * @param {string | number} categoryIdOrSlug - ID or slug of the category to update.
+ * @param {object} updateData - Data to update.
+ * @returns {Promise<Category>} The updated category object.
  */
-const getAllVODs = async (req, res, next) => {
+export const updateCategoryService = async (categoryIdOrSlug, updateData) => {
+  let newB2ThumbFileIdToDeleteOnError = null;
+  let newB2ThumbFileNameToDeleteOnError = null;
+  const {
+    name,
+    description,
+    slug,
+    tags,
+    thumbnailFilePath,
+    originalThumbnailFileName,
+    thumbnailMimeType,
+    userIdForPath = "_global",
+  } = updateData;
+
   try {
-    // Lấy các query params cho filter và pagination
-    const {
-      streamId,
-      userId,
-      streamKey,
-      page,
-      limit,
-      sortBy = "createdAt", // Mặc định sắp xếp theo ngày tạo
-      sortOrder = "DESC", // Mặc định giảm dần
-    } = req.query;
+    const category = await findCategoryByIdOrSlug(categoryIdOrSlug);
+    if (!category) {
+      throw new AppError("Category not found.", 404);
+    }
 
-    const options = {
-      streamId: streamId ? parseInt(streamId) : undefined,
-      userId: userId ? parseInt(userId) : undefined,
-      streamKey: streamKey ? String(streamKey) : undefined,
-      page: page ? parseInt(page) : 1,
-      limit: limit ? parseInt(limit) : 10,
-      sortBy: String(sortBy),
-      sortOrder: String(sortOrder).toUpperCase() === "ASC" ? "ASC" : "DESC",
-    };
+    const oldB2ThumbnailFileId = category.b2ThumbnailFileId;
+    const oldB2ThumbnailFileName = category.b2ThumbnailFileName;
+    let newThumbnailB2Response = null;
 
-    const result = await vodService.getVODs(options);
+    if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
+      logger.info(
+        `Service: New thumbnail provided for category ${category.id}: ${thumbnailFilePath}`
+      );
+      const thumbStats = await fs.stat(thumbnailFilePath);
+      const thumbnailSize = thumbStats.size;
 
-    res.status(200).json({
-      success: true,
-      data: result.vods, // Service đã trả về các trường cần thiết, bao gồm urlExpiresAt
-      pagination: {
-        totalItems: result.totalItems,
-        totalPages: result.totalPages,
-        currentPage: result.currentPage,
-        limit: options.limit,
+      if (thumbnailSize > 0) {
+        const thumbnailStream = fsSync.createReadStream(thumbnailFilePath);
+        const safeOriginalThumbName = originalThumbnailFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const thumbnailFileNameInB2 = `categories/${userIdForPath}/thumbnails/${Date.now()}_${safeOriginalThumbName}`;
+
+        const b2Response = await uploadToB2AndGetPresignedUrl(
+          null,
+          null,
+          null,
+          null, // Video params not needed
+          thumbnailStream,
+          thumbnailSize,
+          thumbnailFileNameInB2,
+          thumbnailMimeType,
+          null,
+          B2_PRESIGNED_URL_DURATION_IMAGES
+        );
+        newThumbnailB2Response = b2Response.thumbnail;
+
+        if (!newThumbnailB2Response || !newThumbnailB2Response.url) {
+          throw new AppError(
+            "Failed to upload new category thumbnail to B2.",
+            500
+          );
+        }
+        newB2ThumbFileIdToDeleteOnError = newThumbnailB2Response.b2FileId;
+        newB2ThumbFileNameToDeleteOnError = newThumbnailB2Response.b2FileName;
+
+        category.thumbnailUrl = newThumbnailB2Response.url;
+        category.thumbnailUrlExpiresAt = newThumbnailB2Response.urlExpiresAt;
+        category.b2ThumbnailFileId = newThumbnailB2Response.b2FileId;
+        category.b2ThumbnailFileName = newThumbnailB2Response.b2FileName;
+        logger.info(
+          `Service: New category thumbnail uploaded to B2: ${newThumbnailB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn("Service: Provided new category thumbnail file is empty.");
+      }
+    }
+
+    if (name !== undefined) category.name = name;
+    if (description !== undefined)
+      category.description = description === "" ? null : description; // Allow clearing description
+    if (slug !== undefined)
+      category.slug = slugify(slug, {
+        lower: true,
+        strict: true,
+        remove: /[*+~.()\'\"!:@]/g,
+      });
+    if (tags !== undefined) category.tags = tags;
+    // Slug will also be updated by hook if name changes
+
+    await category.save();
+    logger.info(`Service: Category ${category.id} updated successfully.`);
+
+    if (
+      newThumbnailB2Response &&
+      oldB2ThumbnailFileId &&
+      oldB2ThumbnailFileName
+    ) {
+      try {
+        logger.info(
+          `Service: Deleting old category thumbnail ${oldB2ThumbnailFileName} from B2.`
+        );
+        await deleteFileFromB2(oldB2ThumbnailFileName, oldB2ThumbnailFileId);
+      } catch (deleteError) {
+        logger.error(
+          "Service: Error deleting old category thumbnail from B2:",
+          deleteError
+        );
+      }
+    }
+    return category;
+  } catch (error) {
+    logger.error(
+      `Service: Error in updateCategoryService for ${categoryIdOrSlug}:`,
+      error
+    );
+    if (newB2ThumbFileIdToDeleteOnError && newB2ThumbFileNameToDeleteOnError) {
+      try {
+        logger.warn(
+          `Service: Cleaning up new B2 thumbnail ${newB2ThumbFileNameToDeleteOnError} due to error.`
+        );
+        await deleteFileFromB2(
+          newB2ThumbFileNameToDeleteOnError,
+          newB2ThumbFileIdToDeleteOnError
+        );
+      } catch (deleteError) {
+        logger.error(
+          "Service: Critical error during new B2 thumbnail cleanup:",
+          deleteError
+        );
+      }
+    }
+    if (error.name === "SequelizeUniqueConstraintError") {
+      throw new AppError(
+        `Category with this name or slug already exists.`,
+        409
+      );
+    }
+    handleServiceError(error, "update category");
+  }
+};
+
+/**
+ * Delete a category.
+ * @param {string | number} categoryIdOrSlug - ID or slug of the category to delete.
+ * @returns {Promise<void>}
+ */
+export const deleteCategoryService = async (categoryIdOrSlug) => {
+  try {
+    const category = await findCategoryByIdOrSlug(categoryIdOrSlug);
+    if (!category) {
+      throw new AppError("Category not found for deletion.", 404);
+    }
+
+    // Check if category is in use by Streams or VODs
+    const streamCount = await Stream.count({
+      where: { categoryId: category.id },
+    });
+    const vodCount = await VOD.count({ where: { categoryId: category.id } });
+
+    if (streamCount > 0 || vodCount > 0) {
+      // Option 1: Prevent deletion
+      // throw new AppError(`Category is in use by ${streamCount} streams and ${vodCount} VODs. Cannot delete.`, 409);
+
+      // Option 2: Set categoryId to null in Streams/VODs (if onDelete: SET NULL is configured in associations)
+      // This is handled by DB constraints if associations are set up with onDelete: SET NULL
+      logger.warn(
+        `Category ${category.id} is in use. Associated streams/VODs will have their categoryId set to null if DB constraints allow.`
+      );
+    }
+
+    const b2ThumbnailFileId = category.b2ThumbnailFileId;
+    const b2ThumbnailFileName = category.b2ThumbnailFileName;
+
+    await category.destroy();
+    logger.info(
+      `Service: Category ${categoryIdOrSlug} (ID: ${category.id}) deleted from DB.`
+    );
+
+    if (b2ThumbnailFileId && b2ThumbnailFileName) {
+      try {
+        logger.info(
+          `Service: Deleting category thumbnail ${b2ThumbnailFileName} from B2.`
+        );
+        await deleteFileFromB2(b2ThumbnailFileName, b2ThumbnailFileId);
+      } catch (deleteError) {
+        logger.error(
+          "Service: Error deleting category thumbnail from B2:",
+          deleteError
+        );
+        // Log error but don't let it fail the whole deletion if DB record is gone.
+      }
+    }
+  } catch (error) {
+    logger.error(
+      `Service: Error in deleteCategoryService for ${categoryIdOrSlug}:`,
+      error
+    );
+    handleServiceError(error, "delete category");
+  }
+};
+
+/**
+ * Get a list of categories with pagination.
+ * @param {object} queryParams - Query parameters (page, limit).
+ * @returns {Promise<object>} List of categories and pagination info.
+ */
+export const getCategoriesService = async ({ page = 1, limit = 10 }) => {
+  try {
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const { count, rows } = await Category.findAndCountAll({
+      order: [["name", "ASC"]],
+      limit: parseInt(limit, 10),
+      offset: offset,
+      attributes: {
+        exclude: [
+          "b2ThumbnailFileId",
+          "b2ThumbnailFileName",
+          "thumbnailUrlExpiresAt",
+        ],
       },
     });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   GET /api/vod/:id
- * @desc    Lấy chi tiết một VOD bằng ID. Pre-signed URL sẽ được tự động làm mới nếu cần.
- * @access  Public (hoặc Private tùy theo yêu cầu)
- */
-const getVODDetails = async (req, res, next) => {
-  try {
-    const vodId = parseInt(req.params.id);
-    if (isNaN(vodId)) {
-      throw new AppError("ID VOD không hợp lệ.", 400);
-    }
-
-    // vodService.getVODById sẽ tự động refresh URL nếu cần
-    const vod = await vodService.getVODById(vodId);
-
-    res.status(200).json({
-      success: true,
-      data: vod, // Đã bao gồm videoUrl và urlExpiresAt được cập nhật nếu cần
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   DELETE /api/vod/:id
- * @desc    Xóa một VOD (yêu cầu quyền chủ sở hữu hoặc admin).
- *          Sẽ xóa cả file trên B2.
- * @access  Private
- */
-const removeVOD = async (req, res, next) => {
-  try {
-    const vodId = parseInt(req.params.id);
-    if (isNaN(vodId)) {
-      throw new AppError("ID VOD không hợp lệ.", 400);
-    }
-
-    const requestingUserId = req.user?.id;
-    const isAdmin = req.user?.role === "admin"; // Giả sử có trường role trong req.user
-
-    if (!requestingUserId) {
-      throw new AppError("Xác thực thất bại, không tìm thấy người dùng.", 401);
-    }
-
-    // vodService.deleteVOD sẽ xử lý cả việc xóa file trên B2
-    await vodService.deleteVOD(vodId, requestingUserId, isAdmin);
-
-    res.status(200).json({
-      success: true,
-      message: "VOD đã được xóa thành công.",
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   POST /api/vod/:id/refresh-url
- * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
- * @access  Private
- */
-const refreshVODSignedUrl = async (req, res, next) => {
-  try {
-    const vodId = parseInt(req.params.id);
-    if (isNaN(vodId)) {
-      throw new AppError("ID VOD không hợp lệ.", 400);
-    }
-
-    const requestingUserId = req.user?.id;
-    const isAdmin = req.user?.role === "admin";
-
-    if (!requestingUserId) {
-      throw new AppError("Xác thực thất bại.", 401);
-    }
-
-    // Kiểm tra quyền: Chỉ admin hoặc chủ sở hữu VOD mới được refresh (tùy chọn)
-    // Hoặc chỉ cần user đã đăng nhập là đủ nếu không quá khắt khe
-    // const vod = await vodService.getVODById(vodId); // Lấy VOD để check owner nếu cần (getVODById có thể refresh rồi)
-    // if (!isAdmin && vod.userId !== requestingUserId) {
-    //     throw new AppError("Bạn không có quyền làm mới URL cho VOD này.", 403);
-    // }
-
-    const refreshedInfo = await vodService.refreshVODUrl(vodId);
-
-    res.status(200).json({
-      success: true,
-      message: "Pre-signed URL cho VOD đã được làm mới thành công.",
-      data: refreshedInfo, // Gồm id, videoUrl, urlExpiresAt mới
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * @route   POST /api/vod/upload-local
- * @desc    Tạo VOD mới bằng cách upload file từ máy người dùng.
- * @access  Private (Yêu cầu xác thực)
- */
-const uploadLocalVODFile = async (req, res, next) => {
-  let videoFilePathTemp = null; // Để lưu đường dẫn file tạm cho việc xóa
-  let thumbnailFilePathTemp = null;
-
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      const firstError = errors.array({ onlyFirstError: true })[0];
-      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
-    }
-
-    const validatedData = matchedData(req);
-    const userId = req.user?.id;
-
-    if (!userId) {
-      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
-    }
-
-    if (!req.files || !req.files.videoFile || !req.files.videoFile[0]) {
-      throw new AppError(
-        "Không có file video nào (videoFile) được tải lên.",
-        400
-      );
-    }
-
-    const { title, description } = validatedData;
-    const videoFile = req.files.videoFile[0];
-    videoFilePathTemp = videoFile.path; // Lưu đường dẫn file video tạm
-
-    let thumbnailFilePath = null; // Sẽ truyền vào service
-    let originalThumbnailFileName = null;
-    let thumbnailMimeType = null;
-
-    if (req.files.thumbnailFile && req.files.thumbnailFile[0]) {
-      const thumbnailFile = req.files.thumbnailFile[0];
-      thumbnailFilePathTemp = thumbnailFile.path; // Lưu đường dẫn file thumbnail tạm
-      thumbnailFilePath = thumbnailFile.path; // Gán cho biến sẽ truyền đi
-      originalThumbnailFileName = thumbnailFile.originalname;
-      thumbnailMimeType = thumbnailFile.mimetype;
-      logger.info(
-        "Controller: Thumbnail được cung cấp bởi người dùng từ file tạm."
-      );
-    }
-
-    const servicePayload = {
-      userId,
-      title,
-      description,
-      videoFilePath: videoFile.path, // Truyền đường dẫn file video
-      originalVideoFileName: videoFile.originalname,
-      videoMimeType: videoFile.mimetype,
-      thumbnailFilePath, // Truyền đường dẫn file thumbnail (có thể là null)
-      originalThumbnailFileName, // có thể là null
-      thumbnailMimeType, // có thể là null
+    return {
+      totalCategories: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+      categories: rows,
     };
-
-    logger.info("Controller: Gọi vodService.createVODFromUpload với payload:", {
-      userId: servicePayload.userId,
-      title: servicePayload.title,
-      originalVideoFileName: servicePayload.originalVideoFileName,
-      videoFilePath: servicePayload.videoFilePath,
-      hasUserThumbnail: !!servicePayload.thumbnailFilePath,
-    });
-
-    const newVOD = await vodService.createVODFromUpload(servicePayload);
-
-    res.status(201).json({
-      success: true,
-      message: "VOD đã được upload và tạo thành công.",
-      data: newVOD,
-    });
   } catch (error) {
-    logger.error("Controller: Lỗi khi upload VOD từ local:", error);
-    next(error);
-  } finally {
-    // Xóa file tạm sau khi xử lý
-    if (videoFilePathTemp) {
-      try {
-        await fs.unlink(videoFilePathTemp);
-        logger.info(`Controller: Đã xóa file video tạm: ${videoFilePathTemp}`);
-      } catch (unlinkError) {
-        logger.error(
-          `Controller: Lỗi khi xóa file video tạm ${videoFilePathTemp}:`,
-          unlinkError
-        );
-      }
-    }
-    if (thumbnailFilePathTemp) {
-      try {
-        await fs.unlink(thumbnailFilePathTemp);
-        logger.info(
-          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
-        );
-      } catch (unlinkError) {
-        logger.error(
-          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp}:`,
-          unlinkError
-        );
-      }
-    }
+    logger.error("Service: Error in getCategoriesService:", error);
+    handleServiceError(error, "get categories list");
   }
 };
 
-export const vodController = {
-  uploadVOD,
-  uploadLocalVODFile,
-  getAllVODs,
-  getVODDetails,
-  removeVOD,
-  refreshVODSignedUrl,
+/**
+ * Get category details by ID or slug, refreshing presigned URL if needed.
+ * @param {string | number} categoryIdOrSlug - Category ID or slug.
+ * @returns {Promise<Category|null>} Category object or null if not found.
+ */
+export const getCategoryDetailsService = async (categoryIdOrSlug) => {
+  try {
+    const category = await findCategoryByIdOrSlug(categoryIdOrSlug, true); // true to include b2 details for refresh
+    if (!category) {
+      return null;
+    }
+
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+
+    if (
+      category.thumbnailUrl &&
+      category.b2ThumbnailFileName &&
+      (!category.thumbnailUrlExpiresAt ||
+        new Date(category.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        logger.info(
+          `Service: Refreshing presigned URL for category thumbnail ${category.id}`
+        );
+        const newThumbnailUrl = await generatePresignedUrlForExistingFile(
+          category.b2ThumbnailFileName,
+          B2_PRESIGNED_URL_DURATION_IMAGES
+        );
+        category.thumbnailUrl = newThumbnailUrl;
+        category.thumbnailUrlExpiresAt = new Date(
+          Date.now() + B2_PRESIGNED_URL_DURATION_IMAGES * 1000
+        );
+        await category.save({
+          fields: ["thumbnailUrl", "thumbnailUrlExpiresAt"],
+        });
+      } catch (refreshError) {
+        logger.error(
+          `Service: Failed to refresh category thumbnail URL for ${category.id}:`,
+          refreshError
+        );
+      }
+    }
+    // Exclude B2 details from final response if not needed by client
+    const categoryResponse = category.toJSON();
+    delete categoryResponse.b2ThumbnailFileId;
+    delete categoryResponse.b2ThumbnailFileName;
+    delete categoryResponse.thumbnailUrlExpiresAt;
+    // Ensure 'tags' is part of categoryResponse if needed, it should be by default
+    // For public facing, only send name, slug, description, thumbnailUrl, tags
+
+    return categoryResponse;
+  } catch (error) {
+    logger.error(
+      `Service: Error in getCategoryDetailsService for ${categoryIdOrSlug}:`,
+      error
+    );
+    handleServiceError(error, "get category details");
+  }
 };
+
+/**
+ * Search for Categories by a specific tag.
+ * @param {object} options
+ * @param {string} options.tag - The tag to search for.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{categories: Category[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+export const searchCategoriesByTagService = async ({
+  tag,
+  page = 1,
+  limit = 10,
+}) => {
+  try {
+    logger.info(
+      `Service: Searching Categories with tag: "${tag}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const { count, rows } = await Category.findAndCountAll({
+      where: {
+        tags: {
+          [Op.contains]: [tag], // PostgreSQL specific: checks if array contains the element
+        },
+      },
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [["name", "ASC"]], // Order by name, for example
+      attributes: {
+        // Exclude B2 details if not needed for this search result
+        exclude: [
+          "b2ThumbnailFileId",
+          "b2ThumbnailFileName",
+          "thumbnailUrlExpiresAt",
+        ],
+      },
+    });
+
+    logger.info(`Service: Found ${count} Categories for tag "${tag}"`);
+
+    return {
+      categories: rows,
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    logger.error(`Service: Error searching Categories by tag "${tag}":`, error);
+    handleServiceError(error, "search Categories by tag");
+  }
+};
+
+// Helper to find category by ID or Slug
+const findCategoryByIdOrSlug = async (identifier, includeB2Details = false) => {
+  const attributes = includeB2Details
+    ? undefined
+    : {
+        exclude: [
+          "b2ThumbnailFileId",
+          "b2ThumbnailFileName",
+          "thumbnailUrlExpiresAt",
+        ],
+      };
+  let category;
+  if (!isNaN(parseInt(identifier))) {
+    category = await Category.findByPk(parseInt(identifier), { attributes });
+  } else {
+    category = await Category.findOne({
+      where: { slug: identifier },
+      attributes,
+    });
+  }
+  return category;
+};
+```
+
+## File: src/validators/categoryValidators.js
+```javascript
+import { body, param, query } from "express-validator";
+
+export const validateCreateCategory = [
+  body("name")
+    .trim()
+    .notEmpty()
+    .withMessage("Category name cannot be empty.")
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Category name must be between 2 and 100 characters."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage(
+      "Description must be a string with a maximum of 1000 characters."
+    ),
+  body("tags")
+    .optional()
+    .isArray()
+    .withMessage("Tags must be an array.")
+    .custom((tags) => {
+      if (!tags.every((tag) => typeof tag === "string")) {
+        throw new Error("Each tag must be a string.");
+      }
+      return true;
+    }),
+  // thumbnailFile will be handled by multer and service layer
+];
+
+export const validateUpdateCategory = [
+  param("categoryIdOrSlug")
+    .notEmpty()
+    .withMessage("Category ID or Slug must be provided in URL path."),
+  body("name")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("Category name cannot be empty.")
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Category name must be between 2 and 100 characters."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage(
+      "Description must be a string with a maximum of 1000 characters."
+    ),
+  body("tags")
+    .optional()
+    .isArray()
+    .withMessage("Tags must be an array.")
+    .custom((tags) => {
+      if (!tags.every((tag) => typeof tag === "string")) {
+        throw new Error("Each tag must be a string.");
+      }
+      return true;
+    }),
+  // thumbnailFile will be handled by multer and service layer
+];
+
+export const validateGetCategoryParams = [
+  // For getting a single category by ID or Slug
+  param("categoryIdOrSlug")
+    .notEmpty()
+    .withMessage("Category ID or Slug must be provided in URL path."),
+];
+
+export const validateGetCategoriesQuery = [
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+];
+
+export const validateSearchCategoriesByTagParams = [
+  query("tag")
+    .trim()
+    .notEmpty()
+    .withMessage("Search tag cannot be empty.")
+    .isString()
+    .withMessage("Search tag must be a string."),
+  // Optional pagination for categories search results
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+];
 ```
 
 ## File: src/lib/b2.service.js
@@ -2768,6 +2995,803 @@ export {
 };
 ```
 
+## File: src/middlewares/authMiddleware.js
+```javascript
+import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
+
+dotenv.config(); // Đảm bảo các biến môi trường từ .env được load
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  console.error("FATAL ERROR: JWT_SECRET is not defined in .env file.");
+  process.exit(1); // Thoát ứng dụng nếu JWT_SECRET không được cấu hình
+}
+
+/**
+ * Middleware xác thực JWT.
+ * Kiểm tra token từ header Authorization.
+ * Nếu hợp lệ, giải mã và gán thông tin user vào req.user.
+ * Nếu không hợp lệ hoặc không có, trả về lỗi 401 hoặc 403.
+ */
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1]; // Lấy token từ "Bearer <token>"
+
+  if (!token) {
+    return res
+      .status(401)
+      .json({ message: "Access token is missing or invalid." });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      console.error("JWT verification error:", err.message);
+      if (err.name === "TokenExpiredError") {
+        return res.status(401).json({ message: "Access token expired." });
+      }
+      // Các lỗi khác như JsonWebTokenError (token không hợp lệ, chữ ký sai)
+      return res.status(403).json({ message: "Access token is not valid." });
+    }
+
+    // Token hợp lệ, gán thông tin user đã giải mã vào req.user
+    // Payload của bạn khi tạo token cần chứa các thông tin này (ví dụ: id, username)
+    req.user = {
+      id: decoded.id,
+      username: decoded.username,
+      role: decoded.role,
+      // Thêm các trường khác nếu có trong payload của token
+    };
+    console.log("User authenticated via JWT:", req.user);
+    next();
+  });
+};
+
+export default authenticateToken;
+
+// User for production stage
+// export function verifyWebhook(req, res, next) {
+//   const signature = req.headers["x-webhook-signature"];
+//   // Giả sử bạn sẽ lưu WEBHOOK_SECRET trong file .env
+//   if (!process.env.WEBHOOK_SECRET) {
+//     console.error("FATAL ERROR: WEBHOOK_SECRET is not defined in .env file.");
+//     return res.status(500).json({ message: "Webhook secret not configured." });
+//   }
+//   if (signature !== process.env.WEBHOOK_SECRET) {
+//     console.warn("Invalid webhook signature received:", signature);
+//     return res.status(401).json({ message: "Invalid webhook signature." });
+//   }
+//   next();
+// }
+
+export function verifyWebhookTokenInParam(req, res, next) {
+  const receivedToken = req.params.webhookToken;
+  const expectedToken = process.env.WEBHOOK_SECRET_TOKEN;
+
+  if (!expectedToken) {
+    console.error(
+      "FATAL ERROR: WEBHOOK_SECRET_TOKEN is not defined in .env file."
+    );
+    return res
+      .status(500)
+      .json({ message: "Webhook secret token not configured on server." });
+  }
+
+  if (receivedToken === expectedToken) {
+    next();
+  } else {
+    console.warn("Invalid webhook token received in URL param:", receivedToken);
+    return res.status(403).json({ message: "Invalid webhook token." });
+  }
+}
+```
+
+## File: src/middlewares/uploadMiddleware.js
+```javascript
+import multer from "multer";
+import path from "path";
+import fs from "fs"; // Thêm fs để kiểm tra và tạo thư mục
+import dotenv from "dotenv"; // Thêm dotenv
+
+dotenv.config(); // Tải biến môi trường
+
+// Đọc đường dẫn thư mục tạm từ biến môi trường
+const tempUploadDir = process.env.TMP_UPLOAD_DIR;
+
+console.log(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
+
+// Đảm bảo thư mục uploads/tmp tồn tại
+if (!fs.existsSync(tempUploadDir)) {
+  try {
+    fs.mkdirSync(tempUploadDir, { recursive: true });
+    console.log(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
+  } catch (err) {
+    console.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
+    throw new Error(`Không thể tạo thư mục upload tạm: ${tempUploadDir}`);
+  }
+}
+
+// Cấu hình lưu trữ cho multer (lưu vào ổ đĩa)
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, tempUploadDir); // Thư mục lưu file tạm
+  },
+  filename: function (req, file, cb) {
+    // Tạo tên file duy nhất để tránh ghi đè, giữ lại phần extension
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(
+      null,
+      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
+    );
+  },
+});
+
+// Hàm kiểm tra loại file (chỉ chấp nhận video và ảnh cho các field tương ứng)
+const fileFilter = (req, file, cb) => {
+  const allowedVideoMimeTypes = [
+    "video/mp4",
+    "video/mpeg",
+    "video/quicktime", // .mov
+    "video/x-msvideo", // .avi
+    "video/x-flv", // .flv
+    "video/webm",
+    "video/x-matroska", // .mkv
+  ];
+  const allowedImageMimeTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+  ];
+
+  if (
+    file.fieldname === "videoFile" &&
+    allowedVideoMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else if (
+    file.fieldname === "thumbnailFile" &&
+    allowedImageMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else if (
+    file.fieldname === "avatarFile" &&
+    allowedImageMimeTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error(
+        `Định dạng file không hợp lệ cho field ${file.fieldname}. Kiểm tra lại các định dạng được chấp nhận.`
+      ),
+      false
+    );
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 1024 * 1024 * 500, // Giới hạn kích thước file: 500MB
+  },
+});
+
+export default upload;
+```
+
+## File: src/models/stream.js
+```javascript
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
+
+const Stream = sequelize.define(
+  "Stream",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users", // Giữ nguyên tham chiếu bằng chuỗi tên bảng
+        key: "id",
+      },
+    },
+    streamKey: {
+      type: DataTypes.STRING,
+      unique: true,
+      allowNull: false,
+    },
+    title: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    status: {
+      type: DataTypes.ENUM("live", "ended"),
+      defaultValue: "ended",
+      allowNull: false,
+    },
+    startTime: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    endTime: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    viewerCount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      allowNull: false,
+    },
+    thumbnailUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    thumbnailUrlExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    b2ThumbnailFileId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    b2ThumbnailFileName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    categoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "categories",
+        key: "id",
+      },
+      onUpdate: "CASCADE",
+      onDelete: "SET NULL",
+    },
+    // createdAt and updatedAt are handled by Sequelize timestamps: true
+  },
+  {
+    timestamps: true, // Enable automatic createdAt and updatedAt fields
+  }
+);
+
+export default Stream;
+```
+
+## File: src/routes/userRoutes.js
+```javascript
+import express from "express";
+import {
+  validateUserRegistration,
+  validateUserLogin,
+  validateUserProfileUpdate,
+} from "../validators/userValidators.js";
+import {
+  register,
+  login,
+  updateProfile,
+  getMyProfile,
+} from "../controllers/userController.js";
+import authenticateToken from "../middlewares/authMiddleware.js";
+import upload from "../middlewares/uploadMiddleware.js";
+
+const router = express.Router();
+
+// Public routes
+router.post("/register", validateUserRegistration, register);
+router.post("/login", validateUserLogin, login);
+
+// Protected routes (require authentication)
+router.get("/me", authenticateToken, getMyProfile);
+
+router.put(
+  "/me/profile",
+  authenticateToken,
+  upload.single("avatarFile"),
+  validateUserProfileUpdate,
+  updateProfile
+);
+
+export default router;
+```
+
+## File: src/validators/streamValidators.js
+```javascript
+import { body, param, query } from "express-validator";
+
+export const validateCreateStream = [
+  body("title")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Title must be a string between 3 and 255 characters"),
+  body("description")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage(
+      "Description must be a string with a maximum of 1000 characters"
+    ),
+  body("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID must be a positive integer")
+    .toInt(),
+];
+
+export const validateUpdateStream = [
+  param("streamId")
+    .isInt({ gt: 0 })
+    .withMessage("Stream ID must be a positive integer"),
+  body("title")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Title must be a string between 3 and 255 characters"),
+  body("description")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage(
+      "Description must be a string with a maximum of 1000 characters"
+    ),
+  body("status")
+    .optional()
+    .isIn(["live", "ended"])
+    .withMessage("Status must be either 'live' or 'ended'"),
+  body("categoryId")
+    .optional({ nullable: true })
+    .isInt({ gt: 0 })
+    .withMessage("Category ID must be a positive integer or null")
+    .toInt(),
+];
+
+export const validateGetStreams = [
+  query("status")
+    .optional()
+    .isIn(["live", "ended"])
+    .withMessage("Status must be either 'live' or 'ended'"),
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+  query("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID must be a positive integer")
+    .toInt(),
+];
+
+export const validateGetStreamById = [
+  param("streamId")
+    .isInt({ gt: 0 })
+    .withMessage("Stream ID must be a positive integer")
+    .toInt(),
+];
+
+export const validateStreamSearchParams = [
+  query("tag")
+    .optional({ checkFalsy: true })
+    .isString()
+    .withMessage("Search tag must be a string if provided.")
+    .trim(),
+  query("searchQuery")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Search query must be a string."),
+  query("streamerUsername")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Streamer username must be a string."),
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+  (req, res, next) => {
+    const { tag, searchQuery, streamerUsername } = req.query;
+    if (!tag && !searchQuery && !streamerUsername) {
+      return res.status(400).json({
+        errors: [
+          {
+            type: "query",
+            msg: "At least one search criteria (tag, searchQuery, or streamerUsername) must be provided.",
+            path: "query",
+            location: "query",
+          },
+        ],
+      });
+    }
+    next();
+  },
+];
+```
+
+## File: src/controllers/userController.js
+```javascript
+import { validationResult } from "express-validator";
+import {
+  registerUser,
+  loginUser,
+  updateUserProfile,
+  getUserProfileById,
+} from "../services/userService.js";
+
+export const register = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const { user, token } = await registerUser(username, password);
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        createdAt: user.createdAt,
+      },
+      token,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const login = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const { user, token } = await loginUser(username, password);
+
+    res.status(200).json({
+      message: "Login successful",
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+      },
+      token,
+    });
+  } catch (error) {
+    res.status(401).json({ error: error.message });
+  }
+};
+
+export const updateProfile = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const userId = req.user.id;
+    const { displayName, bio } = req.body;
+    let avatarFileData = null;
+
+    if (req.file) {
+      avatarFileData = {
+        avatarFilePath: req.file.path,
+        originalAvatarFileName: req.file.originalname,
+        avatarMimeType: req.file.mimetype,
+      };
+    }
+
+    const updatedUser = await updateUserProfile(
+      userId,
+      { displayName, bio },
+      avatarFileData // Pass avatar file data to service
+    );
+
+    res.status(200).json({
+      message: "Profile updated successfully",
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        displayName: updatedUser.displayName,
+        avatarUrl: updatedUser.avatarUrl,
+        bio: updatedUser.bio,
+        role: updatedUser.role,
+        updatedAt: updatedUser.updatedAt,
+        // Consider also returning b2 related fields if needed by client,
+        // or keep them server-side only.
+        b2AvatarFileId: updatedUser.b2AvatarFileId,
+        b2AvatarFileName: updatedUser.b2AvatarFileName,
+        avatarUrlExpiresAt: updatedUser.avatarUrlExpiresAt,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getMyProfile = async (req, res) => {
+  try {
+    const userId = req.user.id; // Lấy userId từ token đã được xác thực
+    const userProfile = await getUserProfileById(userId);
+
+    // userProfile đã được service lọc các trường cần thiết
+    res.status(200).json(userProfile);
+  } catch (error) {
+    // Nếu service ném AppError, nó sẽ có statusCode
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
+  }
+};
+```
+
+## File: src/routes/streamRoutes.js
+```javascript
+import express from "express";
+import {
+  createStream,
+  updateStream,
+  getStreams,
+  getStreamById,
+  searchStreams,
+} from "../controllers/streamController.js";
+import authenticateToken from "../middlewares/authMiddleware.js";
+import upload from "../middlewares/uploadMiddleware.js";
+import {
+  validateCreateStream,
+  validateUpdateStream,
+  validateGetStreams,
+  validateGetStreamById,
+  validateStreamSearchParams,
+} from "../validators/streamValidators.js";
+
+const router = express.Router();
+
+router.post(
+  "/",
+  authenticateToken,
+  upload.single("thumbnailFile"), // Handle thumbnail upload first
+  validateCreateStream, // Ensure validators can handle req.body with multipart/form-data
+  createStream
+);
+
+// PUT /api/streams/:streamId - Cập nhật stream
+// If you also want to allow thumbnail updates, this route would need similar upload middleware
+router.put(
+  "/:streamId",
+  authenticateToken,
+  upload.single("thumbnailFile"), // Handle optional thumbnail upload
+  validateUpdateStream, // Ensure validators can handle req.body with multipart/form-data
+  updateStream
+);
+
+// GET /api/streams - Lấy danh sách stream (không yêu cầu xác thực cho route này)
+router.get("/", validateGetStreams, getStreams);
+
+/**
+ * @route   GET /api/streams/search
+ * @desc    Tìm kiếm Streams theo tag.
+ * @access  Public
+ */
+router.get("/search", validateStreamSearchParams, searchStreams);
+
+// GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
+router.get("/:streamId", validateGetStreamById, getStreamById);
+
+export default router;
+```
+
+## File: src/validators/vodValidator.js
+```javascript
+import { body, param, query } from "express-validator";
+
+// Validator cho việc tạo/upload VOD thủ công bởi admin
+const manualUploadVOD = [
+  body("title")
+    .trim()
+    .notEmpty()
+    .withMessage("Tiêu đề VOD không được để trống.")
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 5000 })
+    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+
+  // Các trường này là bắt buộc khi upload thủ công VOD đã có trên B2
+  body("videoUrl")
+    .trim()
+    .notEmpty()
+    .withMessage("videoUrl (pre-signed URL từ B2) không được để trống.")
+    .isURL()
+    .withMessage("videoUrl phải là một URL hợp lệ."),
+  body("urlExpiresAt")
+    .notEmpty()
+    .withMessage(
+      "urlExpiresAt (thời điểm hết hạn của videoUrl) không được để trống."
+    )
+    .isISO8601()
+    .withMessage("urlExpiresAt phải là một ngày hợp lệ theo định dạng ISO8601.")
+    .toDate(), // Chuyển đổi thành Date object
+  body("b2FileId")
+    .trim()
+    .notEmpty()
+    .withMessage("b2FileId (ID file trên B2) không được để trống."),
+  body("b2FileName")
+    .trim()
+    .notEmpty()
+    .withMessage("b2FileName (tên file trên B2) không được để trống."),
+  body("durationSeconds")
+    .notEmpty()
+    .withMessage(
+      "durationSeconds (thời lượng video tính bằng giây) không được để trống."
+    )
+    .isInt({ gt: 0 })
+    .withMessage("durationSeconds phải là một số nguyên dương.")
+    .toInt(),
+
+  // Các trường tùy chọn
+  body("streamId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("streamId (nếu có) phải là một số nguyên dương.")
+    .toInt(),
+  body("streamKey")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("streamKey (nếu có) không được để trống."),
+  body("thumbnail")
+    .optional()
+    .trim()
+    .isURL()
+    .withMessage("Thumbnail (nếu có) phải là một URL hợp lệ."),
+  body("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID phải là một số nguyên dương (nếu có).")
+    .toInt(),
+  // userId sẽ được lấy từ token xác thực, không cần validate ở đây
+];
+
+// Validator cho việc upload VOD từ file local
+const uploadLocalVOD = [
+  body("title")
+    .trim()
+    .notEmpty()
+    .withMessage("Tiêu đề VOD không được để trống.")
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Tiêu đề VOD phải từ 3 đến 255 ký tự."),
+  body("description")
+    .optional()
+    .trim()
+    .isLength({ max: 5000 })
+    .withMessage("Mô tả không được vượt quá 5000 ký tự."),
+  body("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID phải là một số nguyên dương (nếu có).")
+    .toInt(),
+  // Các trường tùy chọn khác có thể thêm sau nếu cần
+  // File video sẽ được xử lý bởi multer, không cần validate ở đây
+  // streamId, streamKey, userId sẽ được xử lý trong controller
+];
+
+// Validator cho việc lấy danh sách VODs
+const getVODsList = [
+  query("streamId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Stream ID phải là số nguyên dương.")
+    .toInt(),
+  query("userId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("User ID phải là số nguyên dương.")
+    .toInt(),
+  query("streamKey").optional().isString().trim(),
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page phải là số nguyên dương.")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit phải là số nguyên dương.")
+    .toInt(),
+  query("categoryId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Category ID phải là một số nguyên dương (nếu có).")
+    .toInt(),
+  // Bạn có thể thêm sortBy, sortOrder ở đây nếu muốn validate chúng chặt chẽ hơn
+];
+
+export const validateVodSearchParams = [
+  query("tag")
+    .optional({ checkFalsy: true })
+    .isString()
+    .withMessage("Search tag must be a string if provided.")
+    .trim(),
+  query("searchQuery")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Search query must be a string."),
+  query("uploaderUsername")
+    .optional()
+    .isString()
+    .trim()
+    .withMessage("Uploader username must be a string."),
+  query("page")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+  query("limit")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("Limit must be a positive integer")
+    .toInt(),
+  (req, res, next) => {
+    const { tag, searchQuery, uploaderUsername } = req.query;
+    if (!tag && !searchQuery && !uploaderUsername) {
+      return res.status(400).json({
+        errors: [
+          {
+            type: "query",
+            msg: "At least one search criteria (tag, searchQuery, or uploaderUsername) must be provided.",
+            path: "query",
+            location: "query",
+          },
+        ],
+      });
+    }
+    next();
+  },
+];
+
+export const vodValidationRules = {
+  manualUploadVOD, // Đổi tên từ createVOD để rõ ràng hơn
+  uploadLocalVOD,
+  getVODsList, // Thêm validator mới
+  validateVodSearchParams, // Đổi tên và cập nhật
+};
+```
+
 ## File: src/models/vod.js
 ```javascript
 import { DataTypes } from "sequelize";
@@ -2847,9 +3871,24 @@ const VOD = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    categoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "categories", // Tên bảng Categories
+        key: "id",
+      },
+      onUpdate: "CASCADE",
+      onDelete: "SET NULL",
+    },
     durationSeconds: {
       // Đổi tên từ duration để rõ ràng hơn là giây
       type: DataTypes.FLOAT, // Đơn vị: giây (thay đổi từ INTEGER sang FLOAT)
+    },
+    viewCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
     },
     // createdAt và updatedAt được Sequelize quản lý tự động nếu timestamps: true
   },
@@ -2911,8 +3950,20 @@ router.post(
  */
 router.get(
   "/",
+  vodValidationRules.getVODsList, // Áp dụng validator cho query params
   // authenticateToken, // Bỏ comment nếu muốn endpoint này là private
   vodController.getAllVODs
+);
+
+/**
+ * @route   GET /api/vod/search
+ * @desc    Tìm kiếm VODs theo tag.
+ * @access  Public
+ */
+router.get(
+  "/search",
+  vodValidationRules.validateVodSearchParams, // Validator cho query params
+  vodController.searchVODs
 );
 
 /**
@@ -2951,9 +4002,1148 @@ router.post(
 export default router;
 ```
 
+## File: src/index.js
+```javascript
+import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
+import dotenv from "dotenv";
+import http from "http";
+import { Server } from "socket.io";
+import sequelize from "./config/database.js";
+import { connectMongoDB } from "./config/mongodb.js";
+import userRoutes from "./routes/userRoutes.js";
+import streamRoutes from "./routes/streamRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
+import chatRoutes from "./routes/chatRoutes.js";
+import vodRoutes from "./routes/vodRoutes.js";
+import initializeSocketHandlers from "./socketHandlers.js";
+// Import category routes
+import categoryRoutes from "./routes/categoryRoutes.js";
+import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
+
+dotenv.config();
+
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.IO server
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "*",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["my-custom-header"],
+    credentials: true,
+  },
+});
+
+// Middleware
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "*",
+    credentials: true,
+  })
+);
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Routes
+app.use("/api/users", userRoutes);
+app.use("/api/streams", streamRoutes);
+app.use("/api/webhook", webhookRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/vod", vodRoutes);
+// Add category routes
+app.use("/api/categories", categoryRoutes);
+app.use("/api/admin/categories", categoryAdminRoutes);
+
+// Base route
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Livestream API" });
+});
+
+// Database connection and server start
+const PORT = process.env.PORT || 5000;
+
+// Initialize Socket.IO handlers (example, actual implementation might differ)
+initializeSocketHandlers(io);
+
+// Kết nối cơ sở dữ liệu
+const startServer = async () => {
+  try {
+    await sequelize.sync();
+    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
+
+    await connectMongoDB(); // Kết nối MongoDB
+
+    server.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+      console.log(`Socket.IO initialized and listening on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Unable to connect to the database(s):", error);
+    process.exit(1); // Thoát nếu không kết nối được DB chính
+  }
+};
+
+startServer();
+```
+
+## File: src/services/userService.js
+```javascript
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { User } from "../models/index.js";
+import {
+  uploadToB2AndGetPresignedUrl,
+  deleteFileFromB2,
+  generatePresignedUrlForExistingFile,
+} from "../lib/b2.service.js";
+import fs from "fs/promises";
+import fsSync from "fs";
+import { AppError, handleServiceError } from "../utils/errorHandler.js";
+import path from "path";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const logger = {
+  info: console.log,
+  error: console.error,
+  warn: console.warn,
+};
+
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user.id, username: user.username, role: user.role },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "1h",
+    }
+  );
+};
+
+export const registerUser = async (username, password) => {
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      username,
+      password: hashedPassword,
+    });
+    const token = generateToken(user);
+    return { user, token };
+  } catch (error) {
+    throw new Error("Error registering user: " + error.message);
+  }
+};
+
+export const loginUser = async (username, password) => {
+  try {
+    const user = await User.findOne({ where: { username } });
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new Error("Invalid password");
+    }
+
+    const token = generateToken(user);
+    return { user, token };
+  } catch (error) {
+    throw new Error("Error logging in: " + error.message);
+  }
+};
+
+export const updateUserProfile = async (
+  userId,
+  profileData,
+  avatarFileData
+) => {
+  let newB2AvatarFileIdToDeleteOnError = null;
+  let newB2AvatarFileNameToDeleteOnError = null;
+
+  try {
+    const user = await User.findByPk(userId);
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    const { displayName, bio } = profileData;
+    const { avatarFilePath, originalAvatarFileName, avatarMimeType } =
+      avatarFileData || {};
+
+    const oldB2AvatarFileId = user.b2AvatarFileId;
+    const oldB2AvatarFileName = user.b2AvatarFileName;
+    let newAvatarB2Response = null;
+
+    if (avatarFilePath && originalAvatarFileName && avatarMimeType) {
+      logger.info(
+        `Service: New avatar provided for user ${userId}: ${avatarFilePath}`
+      );
+      const avatarStats = await fs.stat(avatarFilePath);
+      const avatarSize = avatarStats.size;
+
+      if (avatarSize > 0) {
+        const avatarStream = fsSync.createReadStream(avatarFilePath);
+        const safeOriginalAvatarFileName = originalAvatarFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const avatarFileNameInB2 = `users/${userId}/avatars/${Date.now()}_${safeOriginalAvatarFileName}`;
+
+        const tempB2Response = await uploadToB2AndGetPresignedUrl(
+          null,
+          0,
+          null,
+          null,
+          avatarStream,
+          avatarSize,
+          avatarFileNameInB2,
+          avatarMimeType,
+          null,
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+            3600 * 24 * 30
+        );
+
+        newAvatarB2Response = tempB2Response.thumbnail;
+
+        if (!newAvatarB2Response || !newAvatarB2Response.url) {
+          logger.error(
+            "Service: Error uploading new avatar to B2, no response or URL."
+          );
+          throw new AppError("Could not upload new avatar to B2.", 500);
+        }
+
+        newB2AvatarFileIdToDeleteOnError = newAvatarB2Response.b2FileId;
+        newB2AvatarFileNameToDeleteOnError = newAvatarB2Response.b2FileName;
+
+        user.avatarUrl = newAvatarB2Response.url;
+        user.avatarUrlExpiresAt = newAvatarB2Response.urlExpiresAt;
+        user.b2AvatarFileId = newAvatarB2Response.b2FileId;
+        user.b2AvatarFileName = newAvatarB2Response.b2FileName;
+
+        logger.info(
+          `Service: New avatar uploaded to B2 successfully: ${newAvatarB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn("Service: New avatar file provided but size is 0.");
+      }
+    }
+
+    if (displayName !== undefined) user.displayName = displayName;
+    if (bio !== undefined) user.bio = bio;
+
+    await user.save();
+    logger.info(`Service: User profile ${userId} updated successfully.`);
+
+    if (newAvatarB2Response && oldB2AvatarFileId && oldB2AvatarFileName) {
+      try {
+        logger.info(
+          `Service: Deleting old avatar ${oldB2AvatarFileName} (ID: ${oldB2AvatarFileId}) from B2.`
+        );
+        await deleteFileFromB2(oldB2AvatarFileName, oldB2AvatarFileId);
+        logger.info(
+          `Service: Deleted old avatar ${oldB2AvatarFileName} from B2.`
+        );
+      } catch (deleteError) {
+        logger.error(
+          `Service: Error deleting old avatar ${oldB2AvatarFileName} from B2: ${deleteError.message}`
+        );
+      }
+    }
+
+    if (avatarFilePath) {
+      try {
+        await fs.unlink(avatarFilePath);
+        logger.info(
+          `Service: Temporary avatar file ${avatarFilePath} deleted.`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Service: Error deleting temporary avatar file ${avatarFilePath}: ${unlinkError.message}`
+        );
+      }
+    }
+
+    return user;
+  } catch (error) {
+    logger.error(
+      `Service: Error in updateUserProfile for user ${userId}:`,
+      error
+    );
+
+    if (
+      newB2AvatarFileIdToDeleteOnError &&
+      newB2AvatarFileNameToDeleteOnError
+    ) {
+      try {
+        logger.warn(
+          `Service: Cleaning up NEW avatar ${newB2AvatarFileNameToDeleteOnError} from B2 due to error during profile update.`
+        );
+        await deleteFileFromB2(
+          newB2AvatarFileNameToDeleteOnError,
+          newB2AvatarFileIdToDeleteOnError
+        );
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Critical error cleaning up NEW avatar ${newB2AvatarFileNameToDeleteOnError} from B2: ${deleteB2Error}`
+        );
+      }
+    }
+
+    if (avatarFileData && avatarFileData.avatarFilePath) {
+      try {
+        if (fsSync.existsSync(avatarFileData.avatarFilePath)) {
+          await fs.unlink(avatarFileData.avatarFilePath);
+          logger.info(
+            `Service: Temporary avatar file ${avatarFileData.avatarFilePath} deleted due to error.`
+          );
+        }
+      } catch (unlinkError) {
+        logger.error(
+          `Service: Error deleting temporary avatar file ${avatarFileData.avatarFilePath} during error handling: ${unlinkError.message}`
+        );
+      }
+    }
+
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not update user profile: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+
+export const getUserProfileById = async (userId) => {
+  try {
+    const user = await User.findByPk(userId, {
+      attributes: [
+        "id",
+        "username",
+        "displayName",
+        "avatarUrl",
+        "avatarUrlExpiresAt",
+        "b2AvatarFileId",
+        "b2AvatarFileName",
+        "bio",
+        "role",
+        "createdAt",
+        "updatedAt",
+      ],
+    });
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    // Logic to refresh avatarUrl if expired or nearing expiry
+    const presignedUrlDurationImages =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+      3600 * 24 * 7; // 7 days default for images
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+
+    if (
+      user.avatarUrl &&
+      user.b2AvatarFileName &&
+      (!user.avatarUrlExpiresAt ||
+        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        logger.info(
+          `Service: Pre-signed URL for avatar of user ${userId} (file: ${user.b2AvatarFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newAvatarUrl = await generatePresignedUrlForExistingFile(
+          user.b2AvatarFileName,
+          presignedUrlDurationImages
+        );
+        user.avatarUrl = newAvatarUrl;
+        user.avatarUrlExpiresAt = new Date(
+          Date.now() + presignedUrlDurationImages * 1000
+        );
+        await user.save();
+        logger.info(
+          `Service: Refreshed pre-signed URL for avatar of user ${userId}. New expiry: ${user.avatarUrlExpiresAt}`
+        );
+      } catch (refreshError) {
+        logger.error(
+          `Service: Failed to refresh avatar URL for user ${userId} (file: ${user.b2AvatarFileName}): ${refreshError.message}`
+        );
+        // Continue with potentially stale URL, or handle error differently
+      }
+    } else if (
+      user.avatarUrl &&
+      !user.b2AvatarFileName &&
+      (!user.avatarUrlExpiresAt ||
+        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `Service: Avatar URL for user ${userId} needs refresh, but b2AvatarFileName is missing.`
+      );
+    }
+
+    return user;
+  } catch (error) {
+    logger.error(
+      `Service: Error in getUserProfileById for user ${userId}:`,
+      error
+    );
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not retrieve user profile: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+```
+
+## File: src/controllers/streamController.js
+```javascript
+import {
+  createStreamWithThumbnailService,
+  updateStreamInfoService,
+  getStreamsListService,
+  getStreamDetailsService,
+  searchStreamsService,
+} from "../services/streamService.js";
+import { validationResult, matchedData } from "express-validator";
+import { v4 as uuidv4 } from "uuid";
+import { Stream, User } from "../models/index.js";
+import { AppError } from "../utils/errorHandler.js";
+import fs from "fs/promises";
+import path from "path";
+
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+// Endpoint Tạo Mới Stream (with thumbnail upload)
+export const createStream = async (req, res, next) => {
+  let thumbnailFilePathTemp = null;
+
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) {
+        await fs.unlink(req.file.path);
+      }
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id;
+
+    if (!userId) {
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    const { title, description, categoryId } = validatedData;
+    let thumbnailFile = null;
+
+    if (req.file && req.file.fieldname === "thumbnailFile") {
+      thumbnailFile = req.file;
+      thumbnailFilePathTemp = thumbnailFile.path;
+    }
+
+    const servicePayload = {
+      userId,
+      title,
+      description,
+      thumbnailFilePath: thumbnailFile?.path,
+      originalThumbnailFileName: thumbnailFile?.originalname,
+      thumbnailMimeType: thumbnailFile?.mimetype,
+      categoryId,
+    };
+
+    logger.info(
+      `Controller: Gọi createStreamWithThumbnailService với payload cho user: ${userId}`,
+      {
+        title: servicePayload.title,
+        hasThumbnail: !!servicePayload.thumbnailFilePath,
+      }
+    );
+
+    const newStream = await createStreamWithThumbnailService(servicePayload);
+
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
+        );
+        thumbnailFilePathTemp = null;
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp} sau khi service thành công: `,
+          unlinkError
+        );
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Stream created successfully",
+      data: newStream,
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi tạo stream:", error);
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (trong catch): ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (trong catch) ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    next(error);
+  }
+};
+
+// Endpoint Cập Nhật Thông Tin Stream
+export const updateStream = async (req, res, next) => {
+  let thumbnailFilePathTemp = null; // For cleaning up temp file
+
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      if (req.file) {
+        // If validation fails after file upload
+        await fs.unlink(req.file.path);
+      }
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const { streamId } = req.params;
+    const validatedData = matchedData(req); // title, description, status from body
+    const currentUserId = req.user?.id;
+
+    if (!currentUserId) {
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    const id = parseInt(streamId);
+    if (isNaN(id)) {
+      if (req.file) await fs.unlink(req.file.path);
+      throw new AppError("Stream ID phải là một số.", 400);
+    }
+
+    let thumbnailFile = null;
+    if (req.file && req.file.fieldname === "thumbnailFile") {
+      thumbnailFile = req.file;
+      thumbnailFilePathTemp = thumbnailFile.path; // Lưu để xóa
+    }
+
+    const servicePayload = {
+      ...validatedData, // title, description, status
+      thumbnailFilePath: thumbnailFile?.path,
+      originalThumbnailFileName: thumbnailFile?.originalname,
+      thumbnailMimeType: thumbnailFile?.mimetype,
+    };
+
+    logger.info(
+      `Controller: Gọi updateStreamInfoService cho stream ${id} bởi user ${currentUserId}`,
+      {
+        updates: servicePayload.title, // just an example field to log
+        hasNewThumbnail: !!servicePayload.thumbnailFilePath,
+      }
+    );
+
+    const updatedStream = await updateStreamInfoService(
+      id,
+      currentUserId,
+      servicePayload
+    );
+
+    // Xóa file thumbnail tạm (nếu có) sau khi service thành công
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (update): ${thumbnailFilePathTemp}`
+        );
+        thumbnailFilePathTemp = null; // Reset để không xóa lại trong finally/catch
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (update) ${thumbnailFilePathTemp} sau khi service thành công: `,
+          unlinkError
+        );
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Stream updated successfully",
+      data: updatedStream, // Trả về stream đã được cập nhật, bao gồm cả thumbnail URL mới nếu có
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi cập nhật stream:", error);
+    // Đảm bảo file tạm được xóa nếu có lỗi
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm (update, trong catch): ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm (update, trong catch) ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    next(error); // Chuyển lỗi cho error handling middleware
+  }
+};
+
+// Endpoint Lấy Danh Sách Stream
+export const getStreams = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  try {
+    const { status, page, limit, categoryId } = req.query;
+    const result = await getStreamsListService({
+      status,
+      page,
+      limit,
+      categoryId,
+    });
+
+    res.status(200).json({
+      message: "Streams fetched successfully",
+      totalStreams: result.totalStreams,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      streams: result.streams.map((stream) => ({
+        id: stream.id,
+        title: stream.title,
+        description: stream.description,
+        status: stream.status,
+        startTime: stream.startTime,
+        endTime: stream.endTime,
+        viewerCount: stream.viewerCount,
+        thumbnailUrl: stream.thumbnailUrl,
+        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
+        user: stream.user,
+        category: stream.category,
+        createdAt: stream.createdAt,
+      })),
+    });
+  } catch (error) {
+    logger.error("Error in getStreams controller:", error);
+    res
+      .status(500)
+      .json({ message: "Error fetching streams", error: error.message });
+  }
+};
+
+// Endpoint Lấy Chi Tiết Một Stream
+export const getStreamById = async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const firstError = errors.array({ onlyFirstError: true })[0];
+    return next(new AppError(`Validation failed: ${firstError.msg}`, 400));
+  }
+
+  try {
+    const { streamId } = req.params;
+    const id = parseInt(streamId);
+    if (isNaN(id)) {
+      return next(new AppError("Stream ID must be a number.", 400));
+    }
+
+    const stream = await getStreamDetailsService(id);
+
+    if (!stream) {
+      return next(new AppError("Stream not found", 404));
+    }
+
+    res.status(200).json({
+      message: "Stream details fetched successfully",
+      stream: {
+        id: stream.id,
+        title: stream.title,
+        description: stream.description,
+        status: stream.status,
+        startTime: stream.startTime,
+        endTime: stream.endTime,
+        viewerCount: stream.viewerCount,
+        thumbnailUrl: stream.thumbnailUrl,
+        thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
+        // streamKey: stream.streamKey, // TODO: Remove this field from response
+        user: stream.user,
+        category: stream.category,
+        createdAt: stream.createdAt,
+        updatedAt: stream.updatedAt,
+      },
+    });
+  } catch (error) {
+    logger.error("Error in getStreamById controller:", error);
+    next(error);
+  }
+};
+
+export const searchStreams = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const {
+      tag,
+      searchQuery,
+      streamerUsername,
+      page = 1,
+      limit = 10,
+    } = matchedData(req, { locations: ["query"] });
+
+    const searchCriteria = {
+      tag,
+      searchQuery,
+      streamerUsername,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    };
+
+    const result = await searchStreamsService(searchCriteria);
+
+    res.status(200).json({
+      success: true,
+      message: "Streams fetched successfully based on search criteria",
+      searchCriteria: {
+        tag: tag || undefined,
+        query: searchQuery || undefined,
+        streamer: streamerUsername || undefined,
+      },
+      totalItems: result.totalItems,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      streams: result.streams,
+    });
+  } catch (error) {
+    logger.error("Controller: Error searching streams:", error);
+    next(error);
+  }
+};
+```
+
+## File: src/controllers/vodController.js
+```javascript
+import { vodService } from "../services/vodService.js";
+import { AppError } from "../utils/errorHandler.js";
+import { matchedData, validationResult } from "express-validator"; // Sử dụng express-validator để validate
+import {
+  uploadToB2AndGetPresignedUrl,
+  generatePresignedUrlForExistingFile,
+  deleteFileFromB2,
+} from "../lib/b2.service.js"; // Thêm import B2 service
+import {
+  getVideoDurationInSeconds,
+  generateThumbnailFromVideo,
+} from "../utils/videoUtils.js"; // Thêm generateThumbnailFromVideo
+import path from "path";
+import fs from "fs/promises"; // Thêm fs để xóa file tạm
+
+const logger = {
+  info: console.log,
+  error: console.error,
+};
+
+/**
+ * @route   POST /api/vod/upload
+ * @desc    (Admin/Manual Upload) Tạo một VOD mới. Yêu cầu metadata đầy đủ bao gồm thông tin file trên B2.
+ *          Endpoint này dành cho trường hợp upload thủ công, không qua luồng Nginx webhook.
+ * @access  Private (Admin)
+ */
+const uploadVOD = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id; // req.user được gán bởi authMiddleware
+
+    if (!userId) {
+      // Hoặc kiểm tra role admin ở đây nếu endpoint này chỉ cho admin
+      throw new AppError(
+        "Xác thực thất bại hoặc userId không được cung cấp.",
+        401
+      );
+    }
+
+    // Dữ liệu cần thiết cho upload thủ công:
+    const {
+      streamId, // Tùy chọn, nhưng nên có nếu liên kết với stream cũ
+      streamKey, // Tùy chọn
+      title,
+      description,
+      videoUrl, // Pre-signed URL đã có
+      urlExpiresAt, // Thời điểm URL hết hạn
+      b2FileId, // ID file trên B2
+      b2FileName, // Tên file trên B2
+      thumbnail, // URL thumbnail (có thể cũng là pre-signed)
+      durationSeconds, // Thời lượng video
+      categoryId, // Thêm categoryId
+    } = validatedData;
+
+    // Service createVOD đã được cập nhật để xử lý các trường này
+    const newVOD = await vodService.createVOD({
+      userId,
+      streamId,
+      streamKey,
+      title,
+      description,
+      videoUrl,
+      urlExpiresAt: new Date(urlExpiresAt), // Chuyển đổi sang Date object nếu cần
+      b2FileId,
+      b2FileName,
+      thumbnail,
+      durationSeconds,
+      categoryId, // Truyền categoryId
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "VOD đã được tạo thành công (thủ công).",
+      data: newVOD,
+    });
+  } catch (error) {
+    next(error); // Chuyển lỗi cho error handling middleware
+  }
+};
+
+/**
+ * @route   GET /api/vod
+ * @desc    Lấy danh sách VOD, hỗ trợ filter và phân trang.
+ * @access  Public (hoặc Private tùy theo yêu cầu)
+ */
+const getAllVODs = async (req, res, next) => {
+  try {
+    // Lấy các query params cho filter và pagination
+    const {
+      streamId,
+      userId,
+      streamKey,
+      page,
+      limit,
+      sortBy = "createdAt", // Mặc định sắp xếp theo ngày tạo
+      sortOrder = "DESC", // Mặc định giảm dần
+      categoryId, // Thêm categoryId
+    } = req.query;
+
+    const options = {
+      streamId: streamId ? parseInt(streamId) : undefined,
+      userId: userId ? parseInt(userId) : undefined,
+      streamKey: streamKey ? String(streamKey) : undefined,
+      page: page ? parseInt(page) : 1,
+      limit: limit ? parseInt(limit) : 10,
+      sortBy: String(sortBy),
+      sortOrder: String(sortOrder).toUpperCase() === "ASC" ? "ASC" : "DESC",
+      categoryId: categoryId ? parseInt(categoryId) : undefined, // Thêm categoryId
+    };
+
+    const result = await vodService.getVODs(options);
+
+    res.status(200).json({
+      success: true,
+      data: result.vods, // Service đã trả về các trường cần thiết, bao gồm urlExpiresAt
+      pagination: {
+        totalItems: result.totalItems,
+        totalPages: result.totalPages,
+        currentPage: result.currentPage,
+        limit: options.limit,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   GET /api/vod/:id
+ * @desc    Lấy chi tiết một VOD bằng ID. Pre-signed URL sẽ được tự động làm mới nếu cần.
+ * @access  Public (hoặc Private tùy theo yêu cầu)
+ */
+const getVODDetails = async (req, res, next) => {
+  try {
+    const vodId = parseInt(req.params.id);
+    if (isNaN(vodId)) {
+      throw new AppError("ID VOD không hợp lệ.", 400);
+    }
+
+    // Lấy userId hoặc IP để theo dõi lượt xem
+    const userIdOrIp = req.user?.id || req.ip;
+
+    // vodService.getVODById sẽ tự động refresh URL và tăng lượt xem nếu cần
+    const vod = await vodService.getVODById(vodId, userIdOrIp);
+
+    res.status(200).json({
+      success: true,
+      data: vod, // Đã bao gồm videoUrl và urlExpiresAt được cập nhật nếu cần
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   DELETE /api/vod/:id
+ * @desc    Xóa một VOD (yêu cầu quyền chủ sở hữu hoặc admin).
+ *          Sẽ xóa cả file trên B2.
+ * @access  Private
+ */
+const removeVOD = async (req, res, next) => {
+  try {
+    const vodId = parseInt(req.params.id);
+    if (isNaN(vodId)) {
+      throw new AppError("ID VOD không hợp lệ.", 400);
+    }
+
+    const requestingUserId = req.user?.id;
+    const isAdmin = req.user?.role === "admin"; // Giả sử có trường role trong req.user
+
+    if (!requestingUserId) {
+      throw new AppError("Xác thực thất bại, không tìm thấy người dùng.", 401);
+    }
+
+    // vodService.deleteVOD sẽ xử lý cả việc xóa file trên B2
+    await vodService.deleteVOD(vodId, requestingUserId, isAdmin);
+
+    res.status(200).json({
+      success: true,
+      message: "VOD đã được xóa thành công.",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   POST /api/vod/:id/refresh-url
+ * @desc    (Admin/Owner) Chủ động làm mới pre-signed URL cho một VOD.
+ * @access  Private
+ */
+const refreshVODSignedUrl = async (req, res, next) => {
+  try {
+    const vodId = parseInt(req.params.id);
+    if (isNaN(vodId)) {
+      throw new AppError("ID VOD không hợp lệ.", 400);
+    }
+
+    const requestingUserId = req.user?.id;
+    const isAdmin = req.user?.role === "admin";
+
+    if (!requestingUserId) {
+      throw new AppError("Xác thực thất bại.", 401);
+    }
+
+    // Kiểm tra quyền: Chỉ admin hoặc chủ sở hữu VOD mới được refresh (tùy chọn)
+    // Hoặc chỉ cần user đã đăng nhập là đủ nếu không quá khắt khe
+    // const vod = await vodService.getVODById(vodId); // Lấy VOD để check owner nếu cần (getVODById có thể refresh rồi)
+    // if (!isAdmin && vod.userId !== requestingUserId) {
+    //     throw new AppError("Bạn không có quyền làm mới URL cho VOD này.", 403);
+    // }
+
+    const refreshedInfo = await vodService.refreshVODUrl(vodId);
+
+    res.status(200).json({
+      success: true,
+      message: "Pre-signed URL cho VOD đã được làm mới thành công.",
+      data: refreshedInfo, // Gồm id, videoUrl, urlExpiresAt mới
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @route   POST /api/vod/upload-local
+ * @desc    Tạo VOD mới bằng cách upload file từ máy người dùng.
+ * @access  Private (Yêu cầu xác thực)
+ */
+const uploadLocalVODFile = async (req, res, next) => {
+  let videoFilePathTemp = null; // Để lưu đường dẫn file tạm cho việc xóa
+  let thumbnailFilePathTemp = null;
+
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const validatedData = matchedData(req);
+    const userId = req.user?.id;
+
+    if (!userId) {
+      throw new AppError("Xác thực thất bại, userId không được cung cấp.", 401);
+    }
+
+    if (!req.files || !req.files.videoFile || !req.files.videoFile[0]) {
+      throw new AppError(
+        "Không có file video nào (videoFile) được tải lên.",
+        400
+      );
+    }
+
+    const { title, description, categoryId } = validatedData;
+    const videoFile = req.files.videoFile[0];
+    videoFilePathTemp = videoFile.path; // Lưu đường dẫn file video tạm
+
+    let thumbnailFilePath = null; // Sẽ truyền vào service
+    let originalThumbnailFileName = null;
+    let thumbnailMimeType = null;
+
+    if (req.files.thumbnailFile && req.files.thumbnailFile[0]) {
+      const thumbnailFile = req.files.thumbnailFile[0];
+      thumbnailFilePathTemp = thumbnailFile.path; // Lưu đường dẫn file thumbnail tạm
+      thumbnailFilePath = thumbnailFile.path; // Gán cho biến sẽ truyền đi
+      originalThumbnailFileName = thumbnailFile.originalname;
+      thumbnailMimeType = thumbnailFile.mimetype;
+      logger.info(
+        "Controller: Thumbnail được cung cấp bởi người dùng từ file tạm."
+      );
+    }
+
+    const servicePayload = {
+      userId,
+      title,
+      description,
+      videoFilePath: videoFile.path, // Truyền đường dẫn file video
+      originalVideoFileName: videoFile.originalname,
+      videoMimeType: videoFile.mimetype,
+      thumbnailFilePath, // Truyền đường dẫn file thumbnail (có thể là null)
+      originalThumbnailFileName, // có thể là null
+      thumbnailMimeType, // có thể là null
+      categoryId, // Thêm categoryId
+    };
+
+    logger.info("Controller: Gọi vodService.createVODFromUpload với payload:", {
+      userId: servicePayload.userId,
+      title: servicePayload.title,
+      originalVideoFileName: servicePayload.originalVideoFileName,
+      videoFilePath: servicePayload.videoFilePath,
+      hasUserThumbnail: !!servicePayload.thumbnailFilePath,
+    });
+
+    const newVOD = await vodService.createVODFromUpload(servicePayload);
+
+    res.status(201).json({
+      success: true,
+      message: "VOD đã được upload và tạo thành công.",
+      data: newVOD,
+    });
+  } catch (error) {
+    logger.error("Controller: Lỗi khi upload VOD từ local:", error);
+    next(error);
+  } finally {
+    // Xóa file tạm sau khi xử lý
+    if (videoFilePathTemp) {
+      try {
+        await fs.unlink(videoFilePathTemp);
+        logger.info(`Controller: Đã xóa file video tạm: ${videoFilePathTemp}`);
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file video tạm ${videoFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+    if (thumbnailFilePathTemp) {
+      try {
+        await fs.unlink(thumbnailFilePathTemp);
+        logger.info(
+          `Controller: Đã xóa file thumbnail tạm: ${thumbnailFilePathTemp}`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Controller: Lỗi khi xóa file thumbnail tạm ${thumbnailFilePathTemp}:`,
+          unlinkError
+        );
+      }
+    }
+  }
+};
+
+const searchVODs = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const {
+      tag,
+      searchQuery,
+      uploaderUsername,
+      page = 1,
+      limit = 10,
+    } = matchedData(req, { locations: ["query"] });
+
+    const searchCriteria = {
+      tag,
+      searchQuery,
+      uploaderUsername,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    };
+
+    const result = await vodService.searchVODs(searchCriteria);
+
+    res.status(200).json({
+      success: true,
+      message: "VODs fetched successfully based on search criteria",
+      searchCriteria: {
+        tag: tag || undefined,
+        query: searchQuery || undefined,
+        uploader: uploaderUsername || undefined,
+      },
+      data: result.vods,
+      pagination: {
+        totalItems: result.totalItems,
+        totalPages: result.totalPages,
+        currentPage: result.currentPage,
+        limit: parseInt(limit, 10),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const vodController = {
+  uploadVOD,
+  uploadLocalVODFile,
+  getAllVODs,
+  getVODDetails,
+  removeVOD,
+  refreshVODSignedUrl,
+  searchVODs,
+};
+```
+
 ## File: src/services/vodService.js
 ```javascript
-import { VOD, User, Stream } from "../models/index.js";
+import { VOD, User, Stream, Category } from "../models/index.js";
 import { AppError, handleServiceError } from "../utils/errorHandler.js";
 import {
   uploadToB2AndGetPresignedUrl,
@@ -2970,6 +5160,9 @@ import path from "path";
 import { spawn } from "child_process";
 import dotenv from "dotenv";
 import { Readable } from "stream";
+import { Op } from "sequelize";
+import { Sequelize } from "sequelize";
+import redisClient from "../lib/redis.js";
 
 dotenv.config();
 
@@ -2977,6 +5170,10 @@ const logger = {
   info: console.log,
   error: console.error,
 };
+
+// Cache để lưu trữ lượt xem gần đây (vodId -> Map(userIdOrIp -> timestamp))
+// const recentViewsCache = new Map(); // Loại bỏ cache Map trong bộ nhớ
+const VIEW_COOLDOWN_MS = 5 * 60 * 1000; // 5 phút (tính bằng mili giây)
 
 // Helper function to format duration for FFmpeg timestamp
 const formatDurationForFFmpeg = (totalSecondsParam) => {
@@ -3147,6 +5344,103 @@ const extractThumbnail = async (
 };
 
 /**
+ * Tăng lượt xem cho VOD nếu người dùng chưa xem trong khoảng thời gian cooldown.
+ * @param {number} vodId - ID của VOD.
+ * @param {string} userIdOrIp - ID người dùng hoặc địa chỉ IP.
+ */
+const incrementVodViewCount = async (vodId, userIdOrIp) => {
+  try {
+    const redisKey = `vod_view_cooldown:${vodId}:${userIdOrIp}`;
+    logger.info(`Service: [VOD-${vodId}] Checking Redis for key: ${redisKey}`);
+    const keyExists = await redisClient.exists(redisKey);
+    logger.info(
+      `Service: [VOD-${vodId}] Redis key ${redisKey} exists? ${
+        keyExists === 1 ? "Yes" : "No"
+      }`
+    );
+
+    if (keyExists === 1) {
+      // redisClient.exists trả về 1 nếu key tồn tại, 0 nếu không
+      logger.info(
+        `Service: [VOD-${vodId}] View count for by ${userIdOrIp} not incremented due to Redis cooldown.`
+      );
+      return;
+    }
+
+    logger.info(
+      `Service: [VOD-${vodId}] Attempting to increment viewCount in DB.`
+    );
+    const incrementResult = await VOD.increment("viewCount", {
+      by: 1,
+      where: { id: vodId },
+    });
+
+    let affectedRowsCount = 0;
+    if (
+      Array.isArray(incrementResult) &&
+      incrementResult.length > 1 &&
+      typeof incrementResult[1] === "number"
+    ) {
+      affectedRowsCount = incrementResult[1];
+    } else if (typeof incrementResult === "number") {
+      // Một số trường hợp cũ hơn hoặc dialect khác
+      affectedRowsCount = incrementResult;
+    } else if (
+      Array.isArray(incrementResult) &&
+      incrementResult.length > 0 &&
+      Array.isArray(incrementResult[0]) &&
+      typeof incrementResult[0][1] === "number"
+    ) {
+      // trường hợp trả về dạng [[instance, changed_boolean_or_count], metadata_count]
+      // hoặc [[result_array], count ] - đây là một phỏng đoán dựa trên sự đa dạng của Sequelize
+      // Thử lấy từ metadata nếu có dạng phức tạp hơn [[...], count]
+      if (
+        incrementResult.length > 1 &&
+        typeof incrementResult[1] === "number"
+      ) {
+        affectedRowsCount = incrementResult[1];
+      } else if (
+        incrementResult[0].length > 1 &&
+        typeof incrementResult[0][1] === "number"
+      ) {
+        // Nếu phần tử đầu tiên là một mảng và phần tử thứ hai của mảng đó là số
+        affectedRowsCount = incrementResult[0][1];
+      }
+    }
+    // Fallback: Nếu không chắc, và không có lỗi, có thể coi là thành công nếu VOD tồn tại
+    // Tuy nhiên, để an toàn, chúng ta dựa vào affectedRowsCount.
+
+    logger.info(
+      `Service: [VOD-${vodId}] affectedRowsCount from DB increment: ${affectedRowsCount}`
+    );
+
+    if (affectedRowsCount > 0) {
+      logger.info(
+        `Service: [VOD-${vodId}] Setting Redis cooldown key: ${redisKey} for ${VIEW_COOLDOWN_MS}ms`
+      );
+      await redisClient.set(redisKey, "1", "PX", VIEW_COOLDOWN_MS);
+      logger.info(
+        `Service: [VOD-${vodId}] Incremented view count by ${userIdOrIp}. Cooldown key set in Redis.`
+      );
+    } else {
+      logger.error(
+        `Service: [VOD-${vodId}] VOD not found or view count not incremented in DB. affectedRowsCount: ${affectedRowsCount}`
+      );
+    }
+  } catch (error) {
+    logger.error(
+      `Service: [VOD-${vodId}] Error in incrementVodViewCount for ${userIdOrIp}:`,
+      error
+    );
+    if (error.message.toLowerCase().includes("redis")) {
+      logger.error(
+        `Service: [VOD-${vodId}] Redis error during view count increment. Proceeding without setting cooldown key.`
+      );
+    }
+  }
+};
+
+/**
  * Xử lý file video đã ghi (FLV), chuyển đổi sang MP4, upload lên B2,
  * trích xuất thumbnail, lấy duration, và lưu thông tin VOD vào DB.
  * @param {object} params
@@ -3186,6 +5480,7 @@ const processRecordedFileToVOD = async ({
         400
       );
     }
+    const streamCategoryId = stream.categoryId; // Lấy categoryId từ stream
 
     // 2. Tạo đường dẫn cho file MP4 và Thumbnail
     const baseName = path.basename(
@@ -3301,9 +5596,14 @@ const processRecordedFileToVOD = async ({
       thumbnailUrlExpiresAt: b2UploadResponse.thumbnail?.urlExpiresAt || null,
       b2ThumbnailFileId: b2UploadResponse.thumbnail?.b2FileId || null,
       b2ThumbnailFileName: b2UploadResponse.thumbnail?.b2FileName || null,
+      categoryId: streamCategoryId,
     };
 
-    logger.info("Creating VOD entry in database with data:", vodData);
+    logger.info("Creating VOD entry in database with data:", {
+      ...vodData,
+      videoUrl: "HIDDEN",
+      thumbnailUrl: "HIDDEN",
+    });
     // Nên sử dụng hàm createVOD service để thống nhất logic tạo VOD
     const newVOD = await createVOD(vodData);
     logger.info(`VOD entry created with ID: ${newVOD.id}`);
@@ -3394,6 +5694,7 @@ const createVOD = async (vodData) => {
       thumbnailUrlExists: !!vodData.thumbnailUrl,
       b2FileId: vodData.b2FileId,
       b2ThumbnailFileId: vodData.b2ThumbnailFileId,
+      categoryId: vodData.categoryId,
     });
 
     // Kiểm tra các trường bắt buộc cơ bản
@@ -3409,6 +5710,17 @@ const createVOD = async (vodData) => {
         "Missing required fields for VOD creation (userId, title, videoUrl, urlExpiresAt, b2FileId, b2FileName).",
         400
       );
+    }
+
+    // Kiểm tra Category nếu categoryId được cung cấp
+    if (vodData.categoryId) {
+      const category = await Category.findByPk(vodData.categoryId);
+      if (!category) {
+        throw new AppError(
+          `Category with ID ${vodData.categoryId} not found.`,
+          400
+        );
+      }
     }
 
     const newVOD = await VOD.create({
@@ -3432,6 +5744,7 @@ const createVOD = async (vodData) => {
       // Các trường tùy chọn liên quan đến stream
       streamId: vodData.streamId || null,
       streamKey: vodData.streamKey || null,
+      categoryId: vodData.categoryId || null,
     });
 
     logger.info(`VOD created successfully with ID: ${newVOD.id}`);
@@ -3452,13 +5765,21 @@ const createVOD = async (vodData) => {
  */
 const getVODs = async (options = {}) => {
   try {
-    const { streamId, userId, streamKey, page = 1, limit = 10 } = options;
+    const {
+      streamId,
+      userId,
+      streamKey,
+      categoryId,
+      page = 1,
+      limit = 10,
+    } = options;
     const offset = (page - 1) * limit;
     const whereClause = {};
 
     if (streamId) whereClause.streamId = streamId;
     if (userId) whereClause.userId = userId;
     if (streamKey) whereClause.streamKey = streamKey;
+    if (categoryId) whereClause.categoryId = categoryId;
 
     const { count, rows } = await VOD.findAndCountAll({
       where: whereClause,
@@ -3468,6 +5789,8 @@ const getVODs = async (options = {}) => {
       attributes: [
         "id",
         "title",
+        "description",
+        "viewCount",
         "videoUrl",
         "thumbnailUrl",
         "thumbnailUrlExpiresAt",
@@ -3480,10 +5803,12 @@ const getVODs = async (options = {}) => {
         "streamKey",
         "urlExpiresAt",
         "b2FileName",
+        "categoryId",
       ],
       include: [
         { model: User, as: "user", attributes: ["id", "username"] },
-        // { model: Stream, as: 'stream', attributes: ['id', 'title'] }, // Có thể bỏ nếu đã có streamKey
+        { model: Stream, as: "stream", attributes: ["id", "title"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],
     });
 
@@ -3505,9 +5830,10 @@ const getVODs = async (options = {}) => {
  * Lấy chi tiết một VOD bằng ID.
  * Sẽ tự động làm mới pre-signed URL nếu nó sắp hết hạn hoặc đã hết hạn.
  * @param {number} vodId - ID của VOD.
+ * @param {string} [userIdOrIp] - ID người dùng hoặc địa chỉ IP để theo dõi lượt xem.
  * @returns {Promise<VOD|null>} Đối tượng VOD hoặc null nếu không tìm thấy.
  */
-const getVODById = async (vodId) => {
+const getVODById = async (vodId, userIdOrIp) => {
   try {
     let vod = await VOD.findByPk(vodId, {
       include: [
@@ -3517,10 +5843,21 @@ const getVODById = async (vodId) => {
           as: "stream",
           attributes: ["id", "title", "streamKey"],
         },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],
     });
     if (!vod) {
       throw new AppError("VOD không tìm thấy.", 404);
+    }
+
+    // Tăng lượt xem (bất đồng bộ, không cần await)
+    if (userIdOrIp) {
+      incrementVodViewCount(vodId, userIdOrIp).catch((err) => {
+        logger.error(
+          `Service: фоновая ошибка при увеличении счетчика просмотров для VOD ${vodId}:`, // Lỗi nền khi tăng lượt xem
+          err
+        );
+      });
     }
 
     // Kiểm tra và làm mới pre-signed URL nếu cần
@@ -3530,10 +5867,12 @@ const getVODById = async (vodId) => {
     const now = new Date();
     const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
 
+    let urlsRefreshed = false;
+
     if (!vod.urlExpiresAt || new Date(vod.urlExpiresAt) < oneHourFromNow) {
       if (vod.b2FileName) {
         logger.info(
-          `Pre-signed URL for VOD ${vodId} (file: ${vod.b2FileName}) is expired or expiring soon. Refreshing...`
+          `Pre-signed URL for VOD Video ${vodId} (file: ${vod.b2FileName}) is expired or expiring soon. Refreshing...`
         );
         const newViewableUrl = await generatePresignedUrlForExistingFile(
           vod.b2FileName,
@@ -3541,24 +5880,64 @@ const getVODById = async (vodId) => {
         );
         vod.videoUrl = newViewableUrl;
         vod.urlExpiresAt = new Date(Date.now() + presignedUrlDuration * 1000);
-
-        // Làm mới cả thumbnail nếu có
-        if (vod.thumbnail && vod.thumbnail.includes("?Authorization=")) {
-          // Giả sử thumbnail cũng là pre-signed
-          // Cần logic để lấy b2FileName của thumbnail, hiện tại chưa lưu riêng
-          // Tạm thời bỏ qua refresh thumbnail hoặc giả sử thumbnail có URL public/thời hạn dài hơn
-          // Nếu thumbnail cũng từ B2 và private, bạn cần lưu b2FileName của thumbnail riêng.
-        }
-
-        await vod.save();
+        urlsRefreshed = true;
         logger.info(
-          `Refreshed pre-signed URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
+          `Refreshed pre-signed Video URL for VOD ${vodId}. New expiry: ${vod.urlExpiresAt}`
         );
       } else {
         logger.warn(
-          `VOD ${vodId} needs URL refresh but b2FileName is missing.`
+          `VOD Video ${vodId} needs URL refresh but b2FileName is missing.`
         );
       }
+    }
+
+    // Refresh Thumbnail URL if it exists, is a B2 presigned URL, and is expiring
+    if (
+      vod.thumbnailUrl &&
+      vod.b2ThumbnailFileName &&
+      (!vod.thumbnailUrlExpiresAt ||
+        new Date(vod.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        // Use B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES for thumbnail refresh duration if available
+        const imagePresignedUrlDuration =
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+          presignedUrlDuration;
+        logger.info(
+          `Pre-signed URL for VOD Thumbnail ${vodId} (file: ${vod.b2ThumbnailFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newThumbnailUrl = await generatePresignedUrlForExistingFile(
+          vod.b2ThumbnailFileName,
+          imagePresignedUrlDuration
+        );
+        vod.thumbnailUrl = newThumbnailUrl;
+        vod.thumbnailUrlExpiresAt = new Date(
+          Date.now() + imagePresignedUrlDuration * 1000
+        );
+        urlsRefreshed = true;
+        logger.info(
+          `Refreshed pre-signed Thumbnail URL for VOD ${vodId}. New expiry: ${vod.thumbnailUrlExpiresAt}`
+        );
+      } catch (thumbRefreshError) {
+        logger.error(
+          `Failed to refresh VOD Thumbnail URL for ${vodId} (file: ${vod.b2ThumbnailFileName}): ${thumbRefreshError.message}`
+        );
+        // Decide if to proceed with stale URL or throw error
+      }
+    } else if (
+      vod.thumbnailUrl &&
+      !vod.b2ThumbnailFileName &&
+      (!vod.thumbnailUrlExpiresAt ||
+        new Date(vod.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `VOD Thumbnail ${vodId} needs URL refresh but b2ThumbnailFileName is missing.`
+      );
+    }
+
+    if (urlsRefreshed) {
+      await vod.save();
+      logger.info(`VOD ${vodId} saved with refreshed URLs.`);
     }
 
     return vod;
@@ -3667,6 +6046,7 @@ const refreshVODUrl = async (vodId) => {
  * @param {string} [data.thumbnailFilePath] - Path to thumbnail file (optional)
  * @param {string} [data.originalThumbnailFileName] - Original thumbnail file name (optional)
  * @param {string} [data.thumbnailMimeType] - MIME type of the thumbnail (optional)
+ * @param {number} data.categoryId - Category ID for the VOD
  * @returns {Promise<VOD>} Đối tượng VOD đã được tạo.
  */
 const createVODFromUpload = async ({
@@ -3679,6 +6059,7 @@ const createVODFromUpload = async ({
   thumbnailFilePath,
   originalThumbnailFileName,
   thumbnailMimeType,
+  categoryId,
 }) => {
   let b2VideoFileIdToDelete = null;
   let b2VideoFileNameToDelete = null;
@@ -3803,6 +6184,7 @@ const createVODFromUpload = async ({
       thumbnailUrlExpiresAt: b2Response.thumbnail?.urlExpiresAt,
       b2ThumbnailFileId: b2Response.thumbnail?.b2FileId,
       b2ThumbnailFileName: b2Response.thumbnail?.b2FileName,
+      categoryId: categoryId,
     };
 
     const newVOD = await createVOD(vodToCreate);
@@ -3841,6 +6223,147 @@ const createVODFromUpload = async ({
   }
 };
 
+/**
+ * Search for VODs by tag, searchQuery (title, description), and/or uploaderUsername.
+ * @param {object} options
+ * @param {string} [options.tag] - The tag to search for.
+ * @param {string} [options.searchQuery] - Text to search in title and description.
+ * @param {string} [options.uploaderUsername] - Username of the VOD uploader.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{vods: VOD[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+const searchVODs = async ({
+  tag,
+  searchQuery,
+  uploaderUsername,
+  page = 1,
+  limit = 10,
+}) => {
+  try {
+    logger.info(
+      `Service: Searching VODs with tag: "${tag}", query: "${searchQuery}", user: "${uploaderUsername}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (page - 1) * limit;
+    const whereClause = {}; // For VOD model
+    const includeClauses = [
+      { model: User, as: "user", attributes: ["id", "username"] },
+      {
+        model: Category,
+        as: "category",
+        attributes: ["id", "name", "slug", "tags"],
+      },
+      // Không cần include Stream ở đây trừ khi có yêu cầu filter/search cụ thể liên quan đến Stream
+      // { model: Stream, as: "stream", attributes: ["id", "title"] },
+    ];
+
+    if (tag) {
+      const lowercasedTag = tag.toLowerCase().replace(/'/g, "''");
+      // Tìm categories chứa tag (không phân biệt chữ hoa chữ thường)
+      const categoriesWithTag = await Category.findAll({
+        where: Sequelize.literal(
+          `EXISTS (SELECT 1 FROM unnest(tags) AS t(tag_element) WHERE LOWER(t.tag_element) = '${lowercasedTag}')`
+        ),
+        attributes: ["id"],
+      });
+
+      if (!categoriesWithTag || categoriesWithTag.length === 0) {
+        logger.info(`Service: No categories found with tag: "${tag}" for VODs`);
+        return {
+          vods: [],
+          totalItems: 0,
+          totalPages: 0,
+          currentPage: parseInt(page, 10),
+        };
+      }
+      const categoryIds = categoriesWithTag.map((cat) => cat.id);
+      whereClause.categoryId = { [Op.in]: categoryIds };
+    }
+
+    if (searchQuery) {
+      whereClause[Op.or] = [
+        { title: { [Op.iLike]: `%${searchQuery}%` } },
+        { description: { [Op.iLike]: `%${searchQuery}%` } },
+      ];
+    }
+
+    if (uploaderUsername) {
+      const userWhere = { username: { [Op.iLike]: `%${uploaderUsername}%` } };
+      const userInclude = includeClauses.find((inc) => inc.as === "user");
+      if (userInclude) {
+        userInclude.where = userWhere;
+        userInclude.required = true; // Quan trọng: chỉ trả về VODs có user khớp
+      } else {
+        // Điều này không nên xảy ra nếu include User luôn được thêm vào
+        logger.warn(
+          "User include clause not found for uploaderUsername VOD search"
+        );
+      }
+    }
+
+    const { count, rows } = await VOD.findAndCountAll({
+      where: whereClause,
+      limit,
+      offset,
+      order: [["createdAt", "DESC"]],
+      attributes: [
+        "id",
+        "title",
+        "videoUrl",
+        "thumbnailUrl",
+        "thumbnailUrlExpiresAt",
+        "durationSeconds",
+        "createdAt",
+        "userId",
+        "categoryId",
+        "urlExpiresAt",
+        "viewCount", // Thêm viewCount
+      ],
+      include: includeClauses,
+      distinct: true, // Quan trọng cho count khi dùng include phức tạp
+    });
+
+    logger.info(`Service: Found ${count} VODs matching criteria.`);
+
+    // Đảm bảo viewCount có trong kết quả trả về
+    const enrichedVods = rows.map((vod) => {
+      const plainVod = vod.get({ plain: true });
+      return {
+        ...plainVod,
+        viewCount: plainVod.viewCount !== undefined ? plainVod.viewCount : 0, // Đảm bảo có giá trị mặc định
+        // Đảm bảo category được trả về đúng cấu trúc
+        category: plainVod.category
+          ? {
+              id: plainVod.category.id,
+              name: plainVod.category.name,
+              slug: plainVod.category.slug,
+              // tags: plainVod.category.tags // Bỏ tags nếu không cần thiết ở đây hoặc đã có trong category
+            }
+          : null,
+        user: plainVod.user
+          ? {
+              id: plainVod.user.id,
+              username: plainVod.user.username,
+            }
+          : null,
+      };
+    });
+
+    return {
+      vods: enrichedVods,
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    logger.error(
+      `Service: Error searching VODs with tag "${tag}", query "${searchQuery}", user "${uploaderUsername}":`,
+      error
+    );
+    handleServiceError(error, "search VODs");
+  }
+};
+
 export const vodService = {
   createVOD,
   createVODFromUpload,
@@ -3849,23 +6372,27 @@ export const vodService = {
   deleteVOD,
   processRecordedFileToVOD,
   refreshVODUrl,
+  searchVODs,
 };
 ```
 
 ## File: src/services/streamService.js
 ```javascript
 import { v4 as uuidv4 } from "uuid";
-import { Stream, User } from "../models/index.js";
-import { Op } from "sequelize"; // For more complex queries if needed later
+import { Stream, User, Category } from "../models/index.js";
+import { Op, Sequelize } from "sequelize"; // For more complex queries if needed later
 import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Added for error handling
 import {
   uploadToB2AndGetPresignedUrl,
   deleteFileFromB2,
+  generatePresignedUrlForExistingFile,
 } from "../lib/b2.service.js"; // Added for B2 upload
 import fs from "fs/promises"; // Added for file system operations
 import fsSync from "fs"; // Added for sync file system operations (createReadStream)
 import path from "path"; // Added for path manipulation
 import dotenv from "dotenv";
+import redisClient from "../lib/redis.js"; // Import Redis client
+import appEmitter from "../utils/appEvents.js"; // Import App Emitter
 
 dotenv.config();
 
@@ -3873,6 +6400,45 @@ const logger = {
   // Basic logger
   info: console.log,
   error: console.error,
+  warn: console.warn,
+};
+
+const LIVE_VIEWER_COUNT_KEY_PREFIX = "stream:live_viewers:";
+const LIVE_VIEWER_TTL_SECONDS =
+  parseInt(process.env.REDIS_STREAM_VIEWER_TTL_SECONDS) || 60 * 60 * 2; // 2 hours default
+
+// Helper function to ensure Redis client is connected
+const ensureRedisConnected = async () => {
+  // Các trạng thái cho thấy client chưa sẵn sàng hoặc không có kết nối chủ động
+  const notConnectedStates = ["close", "end"];
+  // Các trạng thái cho thấy client đang trong quá trình thiết lập kết nối
+  const pendingStates = ["connecting", "reconnecting"];
+
+  if (
+    notConnectedStates.includes(redisClient.status) &&
+    !pendingStates.includes(redisClient.status) // Chỉ thử connect nếu không đang pending
+  ) {
+    try {
+      logger.info(
+        `Redis client status is '${redisClient.status}'. Attempting to connect...`
+      );
+      await redisClient.connect(); // connect() trả về một promise giải quyết khi kết nối thành công hoặc lỗi
+      logger.info(
+        "Redis client connection attempt initiated or completed via connect()."
+      );
+    } catch (err) {
+      logger.error(
+        "Error explicitly calling redisClient.connect():",
+        err.message
+      );
+    }
+  } else if (redisClient.status === "ready") {
+    // logger.info("Redis client is already connected and ready."); // Optional: uncomment for debugging
+  } else if (pendingStates.includes(redisClient.status)) {
+    logger.info(
+      `Redis client is already in status '${redisClient.status}'. No action needed here.`
+    );
+  }
 };
 
 /**
@@ -3884,6 +6450,7 @@ const logger = {
  * @param {string} [data.thumbnailFilePath] - Đường dẫn file thumbnail tạm (nếu có).
  * @param {string} [data.originalThumbnailFileName] - Tên file thumbnail gốc (nếu có).
  * @param {string} [data.thumbnailMimeType] - Mime type của thumbnail (nếu có).
+ * @param {number} [data.categoryId] - ID của category (nếu có).
  * @returns {Promise<Stream>} Đối tượng Stream đã tạo.
  */
 export const createStreamWithThumbnailService = async ({
@@ -3893,6 +6460,7 @@ export const createStreamWithThumbnailService = async ({
   thumbnailFilePath,
   originalThumbnailFileName,
   thumbnailMimeType,
+  categoryId,
 }) => {
   let b2ThumbFileIdToDelete = null;
   let b2ThumbFileNameToDelete = null;
@@ -3904,6 +6472,14 @@ export const createStreamWithThumbnailService = async ({
 
     const streamKey = uuidv4();
     let thumbnailB2Response = null;
+
+    // Kiểm tra Category nếu categoryId được cung cấp
+    if (categoryId) {
+      const category = await Category.findByPk(categoryId);
+      if (!category) {
+        throw new AppError(`Category with ID ${categoryId} not found.`, 400);
+      }
+    }
 
     if (thumbnailFilePath && originalThumbnailFileName && thumbnailMimeType) {
       logger.info(`Service: Có thumbnail được cung cấp: ${thumbnailFilePath}`);
@@ -3973,6 +6549,7 @@ export const createStreamWithThumbnailService = async ({
       thumbnailUrlExpiresAt: thumbnailB2Response?.urlExpiresAt || null,
       b2ThumbnailFileId: thumbnailB2Response?.b2FileId || null,
       b2ThumbnailFileName: thumbnailB2Response?.b2FileName || null,
+      categoryId: categoryId || null, // Gán categoryId
     };
 
     const newStream = await Stream.create(streamData);
@@ -4013,6 +6590,7 @@ export const createStreamWithThumbnailService = async ({
  * @param {string} [updateData.thumbnailFilePath] - Đường dẫn file thumbnail tạm mới (nếu có).
  * @param {string} [updateData.originalThumbnailFileName] - Tên file thumbnail gốc mới (nếu có).
  * @param {string} [updateData.thumbnailMimeType] - Mime type của thumbnail mới (nếu có).
+ * @param {number} [updateData.categoryId] - ID của category mới (nếu có).
  * @returns {Promise<Stream>} Thông tin stream đã cập nhật.
  * @throws {AppError} Nếu có lỗi xảy ra.
  */
@@ -4042,6 +6620,7 @@ export const updateStreamInfoService = async (
       thumbnailFilePath,
       originalThumbnailFileName,
       thumbnailMimeType,
+      categoryId,
     } = updateData;
 
     // Lưu lại thông tin thumbnail cũ để xóa nếu upload thumbnail mới thành công
@@ -4110,6 +6689,20 @@ export const updateStreamInfoService = async (
     // Cập nhật các trường thông tin khác
     if (title !== undefined) stream.title = title;
     if (description !== undefined) stream.description = description;
+
+    // Cập nhật categoryId
+    if (categoryId !== undefined) {
+      // Cho phép cả việc gán null
+      if (categoryId === null) {
+        stream.categoryId = null;
+      } else {
+        const category = await Category.findByPk(categoryId);
+        if (!category) {
+          throw new AppError(`Category with ID ${categoryId} not found.`, 400);
+        }
+        stream.categoryId = categoryId;
+      }
+    }
 
     if (status !== undefined && ["live", "ended"].includes(status)) {
       // Logic cập nhật status, startTime, endTime tương tự như trước
@@ -4193,34 +6786,54 @@ export const updateStreamInfoService = async (
 
 /**
  * Lấy danh sách các stream.
- * @param {object} queryParams - Tham số query (status, page, limit).
+ * @param {object} queryParams - Tham số query (status, page, limit, categoryId).
  * @returns {Promise<object>} Danh sách stream và thông tin phân trang.
  * @throws {Error} Nếu có lỗi xảy ra.
  */
 export const getStreamsListService = async (queryParams) => {
   try {
-    const { status, page = 1, limit = 10 } = queryParams;
+    const { status, page = 1, limit = 10, categoryId } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
     const whereClause = {};
     if (status && ["live", "ended"].includes(status)) {
       whereClause.status = status;
     }
+    if (categoryId) {
+      // Lọc theo categoryId
+      whereClause.categoryId = categoryId;
+    }
 
     const { count, rows } = await Stream.findAndCountAll({
       where: whereClause,
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
+      ],
       order: [["createdAt", "DESC"]],
       limit: parseInt(limit, 10),
       offset: offset,
       distinct: true, // Important for count when using include with hasMany
     });
 
+    const streamsWithLiveViewers = await Promise.all(
+      rows.map(async (stream) => {
+        const plainStream = stream.get({ plain: true });
+        if (plainStream.status === "live" && plainStream.streamKey) {
+          const liveViewers = await getLiveViewerCount(plainStream.streamKey);
+          plainStream.currentViewerCount = liveViewers;
+        } else {
+          plainStream.currentViewerCount = plainStream.viewerCount; // For ended streams, show final DB count
+        }
+        return plainStream;
+      })
+    );
+
     return {
       totalStreams: count,
       totalPages: Math.ceil(count / parseInt(limit, 10)),
       currentPage: parseInt(page, 10),
-      streams: rows,
+      streams: streamsWithLiveViewers, // Use the enriched list
     };
   } catch (error) {
     console.error("Error in getStreamsListService:", error);
@@ -4237,9 +6850,83 @@ export const getStreamsListService = async (queryParams) => {
 export const getStreamDetailsService = async (streamId) => {
   try {
     const stream = await Stream.findByPk(streamId, {
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
+      ],
     });
-    return stream; // Returns null if not found, controller will handle 404
+
+    if (!stream) {
+      return null; // Controller will handle 404
+    }
+
+    // Logic to refresh thumbnailUrl if expired or nearing expiry
+    const presignedUrlDurationImages =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+      3600 * 24 * 7; // 7 days default for images
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+    let thumbnailRefreshed = false;
+
+    if (
+      stream.thumbnailUrl && // Use Sequelize instance directly here
+      stream.b2ThumbnailFileName &&
+      (!stream.thumbnailUrlExpiresAt ||
+        new Date(stream.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        logger.info(
+          `Service: Pre-signed URL for stream thumbnail ${streamId} (file: ${stream.b2ThumbnailFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newThumbnailUrl = await generatePresignedUrlForExistingFile(
+          stream.b2ThumbnailFileName,
+          presignedUrlDurationImages
+        );
+        // Update the Sequelize instance directly
+        stream.thumbnailUrl = newThumbnailUrl;
+        stream.thumbnailUrlExpiresAt = new Date(
+          Date.now() + presignedUrlDurationImages * 1000
+        );
+        thumbnailRefreshed = true; // Mark that we've changed it
+        logger.info(
+          `Service: Refreshed pre-signed URL for stream thumbnail ${streamId}. New expiry: ${stream.thumbnailUrlExpiresAt}`
+        );
+      } catch (refreshError) {
+        logger.error(
+          `Service: Failed to refresh stream thumbnail URL for stream ${streamId} (file: ${stream.b2ThumbnailFileName}): ${refreshError.message}`
+        );
+      }
+    } else if (
+      stream.thumbnailUrl &&
+      !stream.b2ThumbnailFileName &&
+      (!stream.thumbnailUrlExpiresAt ||
+        new Date(stream.thumbnailUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `Service: Stream thumbnail URL for stream ${streamId} needs refresh, but b2ThumbnailFileName is missing.`
+      );
+    }
+
+    // Save the stream instance if thumbnail was refreshed
+    if (thumbnailRefreshed) {
+      await stream.save();
+      logger.info(
+        `Service: Stream ${streamId} saved with refreshed thumbnail URL.`
+      );
+    }
+
+    // Now, get the plain object from the (potentially updated) Sequelize instance
+    const plainStream = stream.get({ plain: true });
+
+    // Get live viewer count if stream is live
+    if (plainStream.status === "live" && plainStream.streamKey) {
+      const liveViewers = await getLiveViewerCount(plainStream.streamKey);
+      plainStream.currentViewerCount = liveViewers;
+    } else {
+      plainStream.currentViewerCount = plainStream.viewerCount;
+    }
+
+    return plainStream; // Returns plain object with potentially refreshed thumbnail and live viewer count
   } catch (error) {
     console.error("Error in getStreamDetailsService:", error);
     throw new Error("Failed to fetch stream details: " + error.message);
@@ -4255,17 +6942,19 @@ export const getStreamDetailsService = async (streamId) => {
 export const markLive = async (streamKey) => {
   try {
     const [updatedRows] = await Stream.update(
-      { status: "live", startTime: new Date(), endTime: null }, // endTime: null để reset nếu stream đã kết thúc trước đó
+      { status: "live", startTime: new Date(), endTime: null, viewerCount: 0 },
       { where: { streamKey } }
     );
-    if (updatedRows === 0) {
-      console.warn(
+    if (updatedRows > 0) {
+      await resetLiveViewerCount(streamKey);
+      logger.info(
+        `Stream ${streamKey} marked as live. Viewer count reset in DB and Redis.`
+      );
+    } else {
+      logger.warn(
         `markLive: Stream with key ${streamKey} not found or no change needed.`
       );
-      // Có thể throw lỗi nếu stream không tồn tại là một trường hợp bất thường
-      // throw new Error(`Stream with key ${streamKey} not found.`);
     }
-    console.log(`Stream ${streamKey} marked as live.`);
   } catch (error) {
     console.error(`Error in markLive for stream ${streamKey}:`, error);
     throw new Error("Failed to mark stream as live: " + error.message);
@@ -4279,112 +6968,358 @@ export const markLive = async (streamKey) => {
  * @returns {Promise<void>}
  * @throws {Error} Nếu có lỗi xảy ra.
  */
-export const markEnded = async (streamKey, viewerCount) => {
+export const markEnded = async (streamKey, finalViewerCountParam) => {
+  // Renamed param for clarity
   try {
+    let actualFinalViewerCount = 0;
+
+    // Prioritize getting the latest count from Redis
+    const liveViewersFromRedis = await getLiveViewerCount(streamKey);
+    if (liveViewersFromRedis !== null) {
+      actualFinalViewerCount = liveViewersFromRedis;
+    }
+
+    if (
+      finalViewerCountParam !== undefined &&
+      !isNaN(parseInt(finalViewerCountParam))
+    ) {
+      const parsedParamCount = parseInt(finalViewerCountParam);
+      if (parsedParamCount > actualFinalViewerCount) {
+        actualFinalViewerCount = parsedParamCount;
+        logger.info(
+          `Using passed finalViewerCountParam ${parsedParamCount} for stream ${streamKey} as it's higher than Redis count.`
+        );
+      }
+    }
+
     const updatePayload = {
       status: "ended",
       endTime: new Date(),
+      viewerCount: Math.max(0, actualFinalViewerCount),
     };
-    if (viewerCount !== undefined && !isNaN(parseInt(viewerCount))) {
-      updatePayload.viewerCount = parseInt(viewerCount);
-    }
 
-    const [updatedRows] = await Stream.update(updatePayload, {
+    const [updatedRows, affectedStreams] = await Stream.update(updatePayload, {
       where: { streamKey },
+      returning: true, // Yêu cầu Sequelize trả về các bản ghi đã được cập nhật
     });
 
-    if (updatedRows === 0) {
-      console.warn(
+    if (updatedRows > 0 && affectedStreams && affectedStreams.length > 0) {
+      const streamId = affectedStreams[0].id; // Lấy streamId từ bản ghi đã cập nhật
+      logger.info(
+        `Stream ${streamKey} (ID: ${streamId}) marked as ended. Final viewer count in DB: ${updatePayload.viewerCount}.`
+      );
+      await resetLiveViewerCount(streamKey);
+      logger.info(
+        `Live viewer count for stream ${streamKey} reset in Redis as stream ended.`
+      );
+
+      // Phát sự kiện stream đã kết thúc
+      appEmitter.emit("stream:ended", {
+        streamId: streamId.toString(),
+        streamKey,
+      });
+      logger.info(
+        `Event 'stream:ended' emitted for streamId: ${streamId}, streamKey: ${streamKey}`
+      );
+    } else {
+      logger.warn(
         `markEnded: Stream with key ${streamKey} not found or no change needed.`
       );
-      // Can throw an error if stream not existing is an edge case
-      // throw new Error(`Stream with key ${streamKey} not found.`);
     }
-    console.log(`Stream ${streamKey} marked as ended.`);
   } catch (error) {
     console.error(`Error in markEnded for stream ${streamKey}:`, error);
     throw new Error("Failed to mark stream as ended: " + error.message);
   }
 };
-```
 
-## File: src/index.js
-```javascript
-import express from "express";
-import bodyParser from "body-parser";
-import cors from "cors";
-import dotenv from "dotenv";
-import http from "http";
-import { Server } from "socket.io";
-import sequelize from "./config/database.js";
-import { connectMongoDB } from "./config/mongodb.js";
-import userRoutes from "./routes/userRoutes.js";
-import streamRoutes from "./routes/streamRoutes.js";
-import webhookRoutes from "./routes/webhookRoutes.js";
-import chatRoutes from "./routes/chatRoutes.js";
-import vodRoutes from "./routes/vodRoutes.js";
-import initializeSocketHandlers from "./socketHandlers.js";
-
-dotenv.config();
-
-const app = express();
-const server = http.createServer(app);
-
-// Initialize Socket.IO server
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["my-custom-header"],
-    credentials: true,
-  },
-});
-
-// Middleware
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "*",
-    credentials: true,
-  })
-);
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Routes
-app.use("/api/users", userRoutes);
-app.use("/api/streams", streamRoutes);
-app.use("/api/webhook", webhookRoutes);
-app.use("/api/chat", chatRoutes);
-app.use("/api/vod", vodRoutes);
-
-// Base route
-app.get("/", (req, res) => {
-  res.json({ message: "Welcome to Livestream API" });
-});
-
-// Database connection and server start
-const PORT = process.env.PORT || 5000;
-
-// Initialize Socket.IO handlers (example, actual implementation might differ)
-initializeSocketHandlers(io);
-
-// Kết nối cơ sở dữ liệu
-const startServer = async () => {
+/**
+ * Search for Streams by a specific tag.
+ * @param {object} options
+ * @param {string} options.tag - The tag to search for.
+ * @param {string} options.searchQuery - The search query to apply to title and description.
+ * @param {string} options.streamerUsername - The username of the streamer to filter by.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{streams: Stream[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+export const searchStreamsService = async ({
+  tag,
+  searchQuery,
+  streamerUsername,
+  page = 1,
+  limit = 10,
+}) => {
   try {
-    await sequelize.sync();
-    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
+    logger.info(
+      `Service: Searching Streams with tag: "${tag}", query: "${searchQuery}", user: "${streamerUsername}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const whereClause = {};
+    const includeClauses = [
+      { model: User, as: "user", attributes: ["id", "username"] },
+      {
+        model: Category,
+        as: "category",
+        attributes: ["id", "name", "slug", "tags"],
+      },
+    ];
 
-    await connectMongoDB(); // Kết nối MongoDB
+    if (tag) {
+      // Sanitize the tag for SQL literal by converting to lowercase and escaping single quotes
+      const lowercasedTag = tag.toLowerCase().replace(/'/g, "''");
+      const categoriesWithTag = await Category.findAll({
+        where: Sequelize.literal(
+          `EXISTS (SELECT 1 FROM unnest(tags) AS t(tag_element) WHERE LOWER(t.tag_element) = '${lowercasedTag}')`
+        ),
+        attributes: ["id"],
+      });
 
-    server.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Socket.IO initialized and listening on port ${PORT}`);
+      if (!categoriesWithTag || categoriesWithTag.length === 0) {
+        logger.info(
+          `Service: No categories found with tag: "${tag}" for Streams`
+        );
+        return {
+          streams: [],
+          totalItems: 0,
+          totalPages: 0,
+          currentPage: parseInt(page, 10),
+        };
+      }
+      const categoryIds = categoriesWithTag.map((cat) => cat.id);
+      whereClause.categoryId = { [Op.in]: categoryIds };
+      logger.info(
+        `Service: Categories found for Streams with tag "${tag}": IDs ${categoryIds.join(
+          ", "
+        )}`
+      );
+    }
+
+    if (searchQuery) {
+      whereClause[Op.or] = [
+        { title: { [Op.iLike]: `%${searchQuery}%` } },
+        { description: { [Op.iLike]: `%${searchQuery}%` } },
+      ];
+    }
+
+    if (streamerUsername) {
+      // Cần đảm bảo 'user' alias đã được định nghĩa trong includeClauses
+      // và Sequelize có thể lọc dựa trên thuộc tính của model đã include.
+      // Cách tiếp cận này hoạt động nếu Sequelize hỗ trợ where trên include trực tiếp
+      // Hoặc có thể cần một sub-query hoặc cách tiếp cận khác nếu phức tạp hơn.
+      const userWhere = { username: { [Op.iLike]: `%${streamerUsername}%` } };
+      const userInclude = includeClauses.find((inc) => inc.as === "user");
+      if (userInclude) {
+        userInclude.where = userWhere;
+        userInclude.required = true; // Để đảm bảo chỉ trả về stream có user khớp
+      } else {
+        // Trường hợp này không nên xảy ra nếu cấu trúc include luôn có user
+        logger.warn(
+          "User include clause not found for streamerUsername search"
+        );
+      }
+    }
+
+    const { count, rows } = await Stream.findAndCountAll({
+      where: whereClause,
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [["createdAt", "DESC"]],
+      include: includeClauses,
+      distinct: true, // Quan trọng cho count khi dùng include
     });
+
+    logger.info(`Service: Found ${count} Streams matching criteria.`);
+
+    const streamsWithLiveViewers = await Promise.all(
+      rows.map(async (streamInstance) => {
+        // Renamed to streamInstance for clarity
+        const plainStream = streamInstance.get({ plain: true });
+        if (plainStream.status === "live" && plainStream.streamKey) {
+          const liveViewers = await getLiveViewerCount(plainStream.streamKey);
+          plainStream.currentViewerCount = liveViewers;
+        } else {
+          plainStream.currentViewerCount = plainStream.viewerCount;
+        }
+        return plainStream;
+      })
+    );
+
+    return {
+      streams: streamsWithLiveViewers,
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+    };
   } catch (error) {
-    console.error("Unable to connect to the database(s):", error);
-    process.exit(1); // Thoát nếu không kết nối được DB chính
+    logger.error(`Service: Error searching Streams:`, error);
+    handleServiceError(error, "search Streams"); // Ensure handleServiceError is robust
   }
 };
 
-startServer();
+/**
+ * Lấy số người xem hiện tại của một stream từ Redis.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<number>} Số người xem hiện tại.
+ */
+export const getLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return 0;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot get live viewer count for ${streamKey}. Returning 0.`
+    );
+    return 0;
+  }
+  try {
+    const countStr = await redisClient.get(
+      `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`
+    );
+    return countStr ? parseInt(countStr, 10) : 0;
+  } catch (error) {
+    logger.error(
+      `Error getting live viewer count for stream ${streamKey} from Redis:`,
+      error
+    );
+    return 0;
+  }
+};
+
+/**
+ * Tăng số người xem hiện tại của một stream trong Redis.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<number|null>} Số người xem mới, hoặc null nếu lỗi nghiêm trọng.
+ */
+export const incrementLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return null;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot increment live viewer count for ${streamKey}.`
+    );
+    return null;
+  }
+  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  try {
+    const newCount = await redisClient.incr(key);
+    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
+    logger.info(
+      `Incremented live viewer count for stream ${streamKey} to ${newCount}`
+    );
+    return newCount;
+  } catch (error) {
+    logger.error(
+      `Error incrementing live viewer count for stream ${streamKey} in Redis:`,
+      error
+    );
+    return null;
+  }
+};
+
+/**
+ * Giảm số người xem hiện tại của một stream trong Redis.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<number|null>} Số người xem mới, hoặc null nếu lỗi nghiêm trọng.
+ */
+export const decrementLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return null;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot decrement live viewer count for ${streamKey}.`
+    );
+    return null;
+  }
+  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  try {
+    const currentCount = await redisClient.decr(key);
+    if (currentCount < 0) {
+      await redisClient.set(key, "0"); // Ensure count doesn't go negative
+      logger.info(
+        `Live viewer count for stream ${streamKey} was negative after DECR, reset to 0.`
+      );
+      await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS); // Set TTL again if key was reset
+      return 0;
+    }
+    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS); // Refresh TTL
+    logger.info(
+      `Decremented live viewer count for stream ${streamKey} to ${currentCount}`
+    );
+    return currentCount;
+  } catch (error) {
+    logger.error(
+      `Error decrementing live viewer count for stream ${streamKey} in Redis:`,
+      error
+    );
+    // Attempt to get current value if decrement fails, or handle error
+    try {
+      const val = await redisClient.get(key); // Get might return null if key disappeared
+      return val ? Math.max(0, parseInt(val, 10)) : 0; // Ensure it's not negative
+    } catch (getErr) {
+      logger.error(
+        `Error fetching count after decrement error for ${streamKey}:`,
+        getErr
+      );
+      return 0; // Fallback to 0
+    }
+  }
+};
+
+/**
+ * Reset số người xem hiện tại của một stream trong Redis về 0.
+ * @param {string} streamKey - Khóa của stream.
+ * @returns {Promise<void>}
+ */
+export const resetLiveViewerCount = async (streamKey) => {
+  if (!streamKey) return;
+  await ensureRedisConnected();
+  if (redisClient.status !== "ready") {
+    logger.warn(
+      `Redis not ready (status: ${redisClient.status}), cannot reset live viewer count for ${streamKey}.`
+    );
+    return;
+  }
+  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  try {
+    await redisClient.set(key, "0");
+    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
+    logger.info(`Reset live viewer count for stream ${streamKey} to 0.`);
+  } catch (error) {
+    logger.error(
+      `Error resetting live viewer count for stream ${streamKey} in Redis:`,
+      error
+    );
+  }
+};
+
+/**
+ * Lấy streamKey và status từ streamId.
+ * @param {number} streamId - ID của stream.
+ * @returns {Promise<{streamKey: string, status: string}|null>} Đối tượng chứa streamKey và status, hoặc null nếu không tìm thấy.
+ */
+export const getStreamKeyAndStatusById = async (streamId) => {
+  if (!streamId || isNaN(parseInt(streamId))) {
+    logger.warn(
+      `Invalid streamId provided to getStreamKeyAndStatusById: ${streamId}`
+    );
+    return null;
+  }
+  try {
+    const stream = await Stream.findByPk(streamId, {
+      attributes: ["streamKey", "status"], // Chỉ lấy các trường cần thiết
+    });
+    if (stream && stream.streamKey) {
+      return { streamKey: stream.streamKey, status: stream.status };
+    }
+    logger.warn(
+      `No stream found with streamId ${streamId} for getStreamKeyAndStatusById.`
+    );
+    return null;
+  } catch (error) {
+    logger.error(
+      `Error fetching streamKey and status for streamId ${streamId}:`,
+      error
+    );
+    return null;
+  }
+};
 ```
