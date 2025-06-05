@@ -5,6 +5,7 @@ import VOD from "./vod.js";
 import Category from "./category.js";
 import Follow from "./follow.js";
 import Notification from "./notification.js";
+import TokenBlacklist from "./TokenBlacklist.js";
 
 // --- Định nghĩa Associations ---
 
@@ -92,4 +93,13 @@ Notification.belongsTo(User, {
 
 // --- Export Models và Sequelize Instance ---
 
-export { sequelize, User, Stream, VOD, Category, Follow, Notification };
+export {
+  sequelize,
+  User,
+  Stream,
+  VOD,
+  Category,
+  Follow,
+  Notification,
+  TokenBlacklist,
+};

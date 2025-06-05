@@ -42,7 +42,7 @@ migrations/20250601000000-create-vods.js
 migrations/20250601233824-add-categoryId-to-vods-table.js
 models/index.js
 scripts/assignAdmin.js
-seeders/20250602000312-initial-categories.js
+seeders/20250605094017-bulk-create-users-and-follows-esm.js
 src/config/database.js
 src/config/mongodb.js
 src/controllers/categoryController.js
@@ -67,6 +67,7 @@ src/models/notification.js
 src/models/stream.js
 src/models/user.js
 src/models/vod.js
+src/queues/notificationQueue.js
 src/routes/admin/categoryAdminRoutes.js
 src/routes/categoryRoutes.js
 src/routes/chatRoutes.js
@@ -92,6 +93,7 @@ src/validators/categoryValidators.js
 src/validators/streamValidators.js
 src/validators/userValidators.js
 src/validators/vodValidator.js
+src/workers/notificationWorker.js
 ```
 
 # Files
@@ -165,73 +167,213 @@ export default {
 };
 ```
 
-## File: seeders/20250602000312-initial-categories.js
+## File: seeders/20250605094017-bulk-create-users-and-follows-esm.js
 ```javascript
 "use strict";
 
-import slugify from "slugify";
+import bcrypt from "bcrypt";
+import { faker } from "@faker-js/faker";
+import { createRequire } from "module";
 
-/** @type {import('sequelize-cli').Migration} */
+const require = createRequire(import.meta.url);
+
+let db;
+try {
+  // Giả định thư mục gốc của project chứa thư mục seeders và src
+  // Đường dẫn từ seeders/your-file.js đến src/models/index.js sẽ là ../src/models/index.js
+  db = require("../src/models/index.js");
+  console.log("Successfully loaded models from '../src/models/index.js'");
+} catch (e) {
+  console.error(
+    "Failed to load models from '../src/models/index.js'. Ensure the path is correct and models/index.js exists and is valid.",
+    e
+  );
+  throw new Error(
+    "Could not load database models for seeder. Path: ../src/models/index.js"
+  );
+}
+
+const User = db.User;
+const Follow = db.Follow;
+
+if (!User || !Follow) {
+  throw new Error(
+    "User or Follow model is undefined. Check model imports in seeder (loaded from models/index.js)."
+  );
+}
+
 export default {
   async up(queryInterface, Sequelize) {
-    const categoriesData = [
-      {
-        name: "Gaming",
-        slug: slugify("Gaming", {
-          lower: true,
-          strict: true,
-          remove: /[*+~.()\'"!:@]/g,
-        }),
-        description: "All about video games and eSports.",
-        thumbnailUrl:
-          "https://via.placeholder.com/150/0000FF/808080?Text=Gaming",
+    const targetUsername = "domixi";
+    const numberOfFollowersToCreate = 10000;
+    const defaultPassword = "password123";
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+    console.log(`Looking for user "${targetUsername}"...`);
+    let domixiUser = await User.findOne({
+      where: { username: targetUsername },
+    });
+
+    if (!domixiUser) {
+      console.warn(`User "${targetUsername}" not found. Creating this user...`);
+      try {
+        domixiUser = await User.create({
+          username: targetUsername,
+          password: await bcrypt.hash("domixiSecurePassword123!", 10),
+          displayName: "Domixi",
+          role: "user",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        console.log(
+          `User "${targetUsername}" created with ID: ${domixiUser.id}`
+        );
+      } catch (error) {
+        console.error(`Failed to create user "${targetUsername}":`, error);
+        throw new Error(
+          `User "${targetUsername}" not found and could not be created.`
+        );
+      }
+    } else {
+      console.log(`User "${targetUsername}" found with ID: ${domixiUser.id}`);
+    }
+
+    const domixiUserId = domixiUser.id;
+
+    const usersToCreate = [];
+    console.log(
+      `Preparing to create ${numberOfFollowersToCreate} new users...`
+    );
+    for (let i = 0; i < numberOfFollowersToCreate; i++) {
+      const uniqueSuffix = `_${Date.now()}_${i}`;
+      // Giới hạn độ dài username và loại bỏ ký tự không hợp lệ
+      const baseUsername = faker.internet
+        .userName()
+        .replace(/[^a-zA-Z0-9_.]/g, "")
+        .substring(0, 20);
+      usersToCreate.push({
+        username: `${baseUsername}${uniqueSuffix}`,
+        password: hashedPassword,
+        displayName: faker.person.fullName(),
+        avatarUrl: faker.image.avatar(),
+        bio: faker.lorem.sentence(),
+        role: "user",
         createdAt: new Date(),
         updatedAt: new Date(),
-      },
-      {
-        name: "Music",
-        slug: slugify("Music", {
-          lower: true,
-          strict: true,
-          remove: /[*+~.()\'"!:@]/g,
-        }),
-        description: "Live music performances, DJ sets, and more.",
-        thumbnailUrl:
-          "https://via.placeholder.com/150/FF0000/FFFFFF?Text=Music",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        name: "Dota 2",
-        slug: slugify("Dota 2", {
-          lower: true,
-          strict: true,
-          remove: /[*+~.()\'"!:@]/g,
-        }),
-        description: "The battlefield of the Ancients awaits.",
-        thumbnailUrl:
-          "https://via.placeholder.com/150/008000/FFFFFF?Text=Dota+2",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        name: "Just Chatting",
-        slug: slugify("Just Chatting", {
-          lower: true,
-          strict: true,
-          remove: /[*+~.()\'"!:@]/g,
-        }),
-        description: "Hang out, talk, and connect with the community.",
-        thumbnailUrl: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-    ];
-    await queryInterface.bulkInsert("Categories", categoriesData, {});
+      });
+    }
+
+    console.log(
+      `Attempting to bulk create ${usersToCreate.length} new users...`
+    );
+    let createdUsers;
+    try {
+      createdUsers = await User.bulkCreate(usersToCreate, {
+        validate: true,
+        returning: true,
+      });
+      console.log(
+        `Successfully created ${createdUsers.length} new users via User.bulkCreate.`
+      );
+    } catch (userCreationError) {
+      console.error(
+        "Error during User.bulkCreate. Details:",
+        userCreationError.message
+      );
+      if (userCreationError.errors) {
+        userCreationError.errors.forEach((err) =>
+          console.error(
+            "Validation error:",
+            err.message,
+            "for field:",
+            err.path
+          )
+        );
+      }
+
+      console.log(
+        "Attempting fallback: queryInterface.bulkInsert (IDs won't be returned directly)."
+      );
+      await queryInterface.bulkInsert("Users", usersToCreate, {});
+      console.log(
+        "Fallback queryInterface.bulkInsert executed. Manually verify user creation and IDs."
+      );
+      const usernames = usersToCreate.map((u) => u.username);
+      createdUsers = await User.findAll({ where: { username: usernames } });
+      if (createdUsers.length !== usersToCreate.length) {
+        console.warn(
+          `FALLBACK: Retrieved ${createdUsers.length} users, expected ${usersToCreate.length}. Follows might be incomplete.`
+        );
+      } else {
+        console.log(
+          `FALLBACK: Successfully retrieved ${createdUsers.length} users.`
+        );
+      }
+    }
+
+    if (!createdUsers || createdUsers.length === 0) {
+      console.error(
+        "No users were created or IDs could not be retrieved. Cannot proceed to create follows."
+      );
+      throw new Error("Failed to create new users or retrieve their IDs.");
+    }
+
+    console.log(
+      `Preparing to create follow relationships for ${createdUsers.length} users...`
+    );
+    const validCreatedUsers = createdUsers.filter((user) => user && user.id);
+    const followsToCreate = validCreatedUsers.map((follower) => ({
+      followerId: follower.id,
+      followingId: domixiUserId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    if (followsToCreate.length > 0) {
+      await queryInterface.bulkInsert("Follows", followsToCreate, {});
+      console.log(
+        `Successfully made ${followsToCreate.length} users follow "${targetUsername}".`
+      );
+    } else {
+      console.warn(
+        "No valid created users with IDs found to create follow relationships. This might happen if User.bulkCreate failed and fallback also had issues retrieving users."
+      );
+    }
+    console.log("Seeder 'up' function completed.");
   },
 
   async down(queryInterface, Sequelize) {
-    await queryInterface.bulkDelete("Categories", null, {});
+    console.log("Executing down for seeder: bulk-create-users-and-follows-esm");
+    const targetUsername = "domixi";
+
+    const domixiUser = await User.findOne({
+      where: { username: targetUsername },
+    });
+    if (domixiUser) {
+      console.log(
+        'Attempting to delete follows for user "' +
+          targetUsername +
+          '" (ID: ' +
+          domixiUser.id +
+          ")"
+      );
+      const result = await queryInterface.bulkDelete(
+        "Follows",
+        { followingId: domixiUser.id },
+        {}
+      );
+      console.log("Follow records deletion result for domixi:", result);
+    } else {
+      console.log(
+        'User "' +
+          targetUsername +
+          '" not found, skipping deletion of follow records.'
+      );
+    }
+
+    console.warn(
+      "`down` seeder (ESM) executed. Follows for domixi might have been removed. Bulk user deletion is not automatically performed by this down method for safety."
+    );
   },
 };
 ```
@@ -495,33 +637,6 @@ const notificationController = {
 export default notificationController;
 ```
 
-## File: src/lib/redis.js
-```javascript
-import Redis from "ioredis";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const redisClient = new Redis({
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  maxRetriesPerRequest: 3, // Optional: configure retry strategy
-  enableReadyCheck: true,
-});
-
-redisClient.on("connect", () => {
-  console.log("Connected to Redis successfully!");
-});
-
-redisClient.on("error", (err) => {
-  console.error("Could not connect to Redis:", err);
-  // Cân nhắc việc xử lý lỗi ở đây, ví dụ: thoát ứng dụng hoặc chạy ở chế độ không cache
-});
-
-export default redisClient;
-```
-
 ## File: src/middlewares/adminCheckMiddleware.js
 ```javascript
 import { AppError } from "../utils/errorHandler.js"; // Optional: for consistent error handling
@@ -688,6 +803,54 @@ const Notification = sequelize.define(
 );
 
 export default Notification;
+```
+
+## File: src/queues/notificationQueue.js
+```javascript
+import { Queue } from "bullmq";
+import redisClient from "../lib/redis.js";
+
+const queueName = "notification-tasks";
+
+// Khởi tạo Queue với kết nối Redis và các tùy chọn
+const notificationQueue = new Queue(queueName, {
+  connection: redisClient,
+  defaultJobOptions: {
+    attempts: 3, // Số lần thử lại job nếu thất bại
+    backoff: {
+      type: "exponential", // Kiểu backoff: exponential, fixed
+      delay: 1000, // Thời gian chờ ban đầu (ms)
+    },
+    removeOnComplete: {
+      // Tự động xóa job khi hoàn thành
+      count: 5000, // Giữ lại 5000 jobs hoàn thành gần nhất
+      age: 24 * 3600, // Giữ lại jobs hoàn thành trong 24 giờ (tính bằng giây)
+    },
+    removeOnFail: {
+      // Giữ lại 1000 job thất bại gần nhất
+      count: 5000, // Giữ lại 5000 job thất bại gần nhất
+      age: 7 * 24 * 3600, // Giữ job lỗi trong 7 ngày
+    },
+  },
+});
+
+notificationQueue.on("waiting", (jobId) => {
+  console.log(`A job with ID ${jobId} is waiting.`);
+});
+
+notificationQueue.on("active", (job) => {
+  console.log(`Job ${job.id} is now active.`);
+});
+
+notificationQueue.on("completed", (job, result) => {
+  console.log(`Job ${job.id} completed with result ${result}`);
+});
+
+notificationQueue.on("failed", (job, err) => {
+  console.log(`Job ${job.id} failed with error ${err.message}`);
+});
+
+export default notificationQueue;
 ```
 
 ## File: src/routes/admin/categoryAdminRoutes.js
@@ -1102,305 +1265,6 @@ const followService = {
 export default followService;
 ```
 
-## File: src/services/notificationService.js
-```javascript
-import { User, Notification, sequelize } from "../models/index.js";
-// import { redisClient } from '../lib/redis.js'; // TODO: Sẽ uncomment khi triển khai Redis
-// import { io } from '../index.js'; // Cần io instance từ src/index.js, hoặc truyền vào, hoặc dùng event emitter
-import { AppError } from "../utils/errorHandler.js";
-import logger from "../utils/logger.js"; // Thêm logger
-
-// Placeholder cho io instance, sẽ cần giải pháp tốt hơn để tránh circular dependency
-// hoặc truyền io vào các hàm cần thiết.
-let ioInstance = null;
-export const setIoInstance = (io) => {
-  ioInstance = io;
-  logger.info("Socket.IO instance set in notificationService");
-};
-
-const notificationService = {
-  createNotification: async (
-    userId,
-    type,
-    message,
-    relatedEntityId = null,
-    relatedEntityType = null,
-    creatorUsername = null // Thêm username của người tạo sự kiện (ví dụ: người follow)
-  ) => {
-    try {
-      const userExists = await User.findByPk(userId);
-      if (!userExists) {
-        // Không throw lỗi ở đây vì có thể là thông báo cho user không tồn tại (ít gặp)
-        // hoặc là service khác sẽ handle. Tuy nhiên, ghi log là quan trọng.
-        logger.warn(
-          `Attempted to create notification for non-existent user ID: ${userId}`
-        );
-        // return null; // Hoặc throw AppError tùy theo yêu cầu nghiệp vụ
-      }
-
-      const notificationData = {
-        userId,
-        type,
-        message,
-        relatedEntityId,
-        relatedEntityType,
-      };
-
-      const notification = await Notification.create(notificationData);
-      logger.info(
-        `Notification created for user ${userId}, type ${type}, ID: ${notification.id}`
-      );
-
-      if (ioInstance) {
-        const notificationRoom = `notification:${userId}`;
-        // Gửi thêm thông tin chi tiết hơn cho client nếu cần
-        const payload = {
-          ...notification.toJSON(),
-          // Ví dụ: thêm thông tin người tạo nếu là 'new_follower'
-          ...(type === "new_follower" &&
-            creatorUsername &&
-            relatedEntityId && {
-              actor: { id: relatedEntityId, username: creatorUsername },
-            }),
-        };
-        ioInstance.to(notificationRoom).emit("new_notification", payload);
-        logger.info(`Emitted 'new_notification' to room ${notificationRoom}`);
-      } else {
-        logger.warn(
-          "ioInstance not set in notificationService, cannot emit real-time notification."
-        );
-      }
-
-      // TODO: Cập nhật Redis (user:notifications:unread:${userId})
-      // await redisClient.incr(`user:notifications:unread:${userId}`);
-
-      return notification;
-    } catch (error) {
-      logger.error(`Error in createNotification for user ${userId}:`, error);
-      // Không ném lỗi ở đây để không làm gián đoạn luồng gọi (ví dụ khi follow thành công nhưng notification lỗi)
-      // Service gọi hàm này nên tự xử lý.
-      return null; // Hoặc throw new AppError('Could not create notification', 500, error); tùy theo yêu cầu
-    }
-  },
-
-  getNotifications: async (userId, page = 1, limit = 10, isRead) => {
-    try {
-      const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-      const whereClause = { userId };
-      if (isRead !== undefined && (isRead === true || isRead === "true")) {
-        whereClause.isRead = true;
-      } else if (
-        isRead !== undefined &&
-        (isRead === false || isRead === "false")
-      ) {
-        whereClause.isRead = false;
-      }
-
-      const { count, rows } = await Notification.findAndCountAll({
-        where: whereClause,
-        limit: parseInt(limit, 10),
-        offset,
-        order: [["createdAt", "DESC"]],
-        // TODO: Cân nhắc include User (relatedEntity) nếu type là 'new_follower' để hiển thị username người follow
-        // include: [
-        //   {
-        //     model: User,
-        //     as: 'relatedUser', // Cần định nghĩa association này nếu muốn dùng
-        //     required: false,
-        //     where: { '$Notification.relatedEntityType$': 'user' }
-        //   }
-        // ]
-      });
-
-      return {
-        notifications: rows,
-        totalItems: count,
-        totalPages: Math.ceil(count / parseInt(limit, 10)),
-        currentPage: parseInt(page, 10),
-      };
-    } catch (error) {
-      logger.error(`Error in getNotifications for user ${userId}:`, error);
-      throw new AppError("Could not retrieve notifications", 500, error);
-    }
-  },
-
-  markNotificationAsRead: async (notificationId, userId) => {
-    try {
-      const notification = await Notification.findOne({
-        where: { id: notificationId, userId },
-      });
-
-      if (!notification) {
-        throw new AppError("Notification not found or not owned by user", 404);
-      }
-
-      if (notification.isRead) {
-        return {
-          success: true,
-          message: "Notification already marked as read",
-          notification,
-        };
-      }
-
-      notification.isRead = true;
-      await notification.save();
-
-      // TODO: Cập nhật Redis
-      // const unreadCount = await Notification.count({ where: { userId, isRead: false } });
-      // await redisClient.set(`user:notifications:unread:${userId}`, unreadCount);
-
-      logger.info(
-        `Notification ${notificationId} marked as read for user ${userId}`
-      );
-      return {
-        success: true,
-        message: "Notification marked as read",
-        notification,
-      };
-    } catch (error) {
-      logger.error(
-        `Error in markNotificationAsRead for notification ${notificationId}:`,
-        error
-      );
-      if (error instanceof AppError) throw error;
-      throw new AppError("Could not mark notification as read", 500, error);
-    }
-  },
-
-  markAllNotificationsAsRead: async (userId) => {
-    try {
-      const [affectedCount] = await Notification.update(
-        { isRead: true },
-        { where: { userId, isRead: false }, returning: false } // returning: false vì không cần lấy lại bản ghi
-      );
-
-      // TODO: Cập nhật Redis
-      // await redisClient.set(`user:notifications:unread:${userId}`, 0);
-
-      logger.info(
-        `All unread notifications marked as read for user ${userId}. Count: ${affectedCount}`
-      );
-      return {
-        success: true,
-        message: "All notifications marked as read",
-        affectedCount,
-      };
-    } catch (error) {
-      logger.error(
-        `Error in markAllNotificationsAsRead for user ${userId}:`,
-        error
-      );
-      throw new AppError(
-        "Could not mark all notifications as read",
-        500,
-        error
-      );
-    }
-  },
-
-  getUnreadNotificationCount: async (userId) => {
-    // TODO: Lấy từ Redis trước, nếu không có thì query DB và cache lại
-    try {
-      // const cachedCount = await redisClient.get(`user:notifications:unread:${userId}`);
-      // if (cachedCount !== null) return parseInt(cachedCount, 10);
-
-      const count = await Notification.count({
-        where: { userId, isRead: false },
-      });
-      // await redisClient.set(`user:notifications:unread:${userId}`, count);
-      return count;
-    } catch (error) {
-      logger.error(
-        `Error in getUnreadNotificationCount for user ${userId}:`,
-        error
-      );
-      // Trả về 0 nếu có lỗi để không làm crash flow, nhưng cần log
-      return 0;
-    }
-  },
-
-  // Hàm này sẽ được gọi từ streamService hoặc vodService
-  notifyFollowers: async (actorUser, actionType, entity, messageGenerator) => {
-    // actorUser: User object của người thực hiện hành động (e.g., người bắt đầu stream)
-    // actionType: 'stream_started', 'new_vod'
-    // entity: Stream object hoặc VOD object
-    // messageGenerator: function(followerUsername, actorUsername, entityTitle) => "message string"
-
-    try {
-      logger.info(
-        `Attempting to notify followers for actor ${actorUser.username} (ID: ${actorUser.id}), action: ${actionType}`
-      );
-      // Đây là một phần phụ thuộc vào followService.getFollowers
-      // Tạm thời chúng ta sẽ cần một cách để lấy ID của tất cả follower
-      // Giả sử followService có hàm getFollowerIds(userId)
-      const { default: followService } = await import("./followService.js"); // Dynamic import để tránh circular dependency
-
-      const followers = await followService.getFollowersInternal(
-        actorUser.id,
-        null,
-        null,
-        true
-      ); // Lấy tất cả follower, chỉ cần id, username
-
-      if (!followers || followers.length === 0) {
-        logger.info(
-          `No followers found for user ${actorUser.username} (ID: ${actorUser.id}) to notify for ${actionType}.`
-        );
-        return;
-      }
-
-      logger.info(
-        `Found ${followers.length} followers for ${actorUser.username} (ID: ${actorUser.id}). Preparing to send ${actionType} notifications.`
-      );
-
-      for (const followRelation of followers) {
-        // followRelation là bản ghi từ bảng Follows, follower là User object đã include
-        const followerUser = followRelation.follower;
-        if (!followerUser || !followerUser.id) {
-          logger.warn(
-            `Follower user data missing for follow relation ID: ${followRelation.id}`
-          );
-          continue;
-        }
-
-        const message = messageGenerator(
-          followerUser.username, // follower's username
-          actorUser.username, // actor's username
-          entity.title ||
-            (entityType === "stream"
-              ? `Stream by ${actorUser.username}`
-              : "New Content") // entity's title or default
-        );
-
-        let relatedEntityType = null;
-        if (actionType === "stream_started") relatedEntityType = "stream";
-        else if (actionType === "new_vod") relatedEntityType = "vod";
-
-        await notificationService.createNotification(
-          followerUser.id, // Người nhận thông báo
-          actionType,
-          message,
-          entity.id, // ID của Stream hoặc VOD
-          relatedEntityType, // 'stream' hoặc 'vod'
-          actorUser.username // Username của người tạo sự kiện (người bắt đầu stream/tạo VOD)
-        );
-      }
-      logger.info(
-        `Successfully queued notifications for ${actionType} from actor ${actorUser.id} to their followers.`
-      );
-    } catch (error) {
-      logger.error(
-        `Error in notifyFollowers for actor ${actorUser.id}, action ${actionType}:`,
-        error
-      );
-      // Không re-throw để không làm crash tiến trình chính (stream/VOD creation)
-    }
-  },
-};
-
-export default notificationService;
-```
-
 ## File: src/utils/appEvents.js
 ```javascript
 import EventEmitter from "events";
@@ -1464,6 +1328,123 @@ const logger = {
 };
 
 export default logger;
+```
+
+## File: src/workers/notificationWorker.js
+```javascript
+import { Worker } from "bullmq";
+import redisClient from "../lib/redis.js";
+import notificationService from "../services/notificationService.js";
+import logger from "../utils/logger.js";
+
+const queueName = "notification-tasks";
+
+const worker = new Worker(
+  queueName,
+  async (job) => {
+    const { actionType, actorUser, entity, followers, messageTemplate } =
+      job.data;
+    logger.info(
+      `Processing job ${job.id} for action: ${actionType}, entity: ${entity?.id}, actor: ${actorUser?.id}, ${followers.length} followers.`
+    );
+
+    let relatedEntityType = null;
+    if (actionType === "stream_started") {
+      relatedEntityType = "stream";
+    } else if (actionType === "new_vod") {
+      relatedEntityType = "vod";
+    } else if (actionType === "new_follower") {
+      relatedEntityType = "user"; // Theo mô tả của createNotification
+    } else {
+      logger.warn(
+        `Job ${job.id}: Unknown actionType: ${actionType}. Skipping.`
+      );
+      return { success: false, reason: "unknown_action_type" };
+    }
+
+    let successfulNotifications = 0;
+    let failedNotifications = 0;
+
+    for (const follower of followers) {
+      if (!follower || !follower.id) {
+        logger.warn(
+          `Job ${job.id}: Invalid follower data:`,
+          follower,
+          `Skipping.`
+        );
+        failedNotifications++;
+        continue;
+      }
+
+      try {
+        // Theo Bước 5 của task.md, createNotification cần:
+        // userId, type, message, relatedEntityId, relatedEntityType, creatorUsername, actorUserId, entityTitle
+        const notificationResult = await notificationService.createNotification(
+          follower.id, // userId (của người nhận thông báo - follower)
+          actionType, // type (stream_started, new_vod, new_follower)
+          messageTemplate, // message (hoặc message được tạo từ template này)
+          entity?.id || (actionType === "new_follower" ? actorUser?.id : null), // relatedEntityId (ID của stream/VOD, hoặc actor nếu là new_follower)
+          relatedEntityType, // relatedEntityType ("stream", "vod", "user")
+          actorUser?.username, // creatorUsername (username của người tạo ra hành động)
+          actorUser?.id, // actorUserId (ID của người tạo ra hành động)
+          entity?.title // entityTitle (tiêu đề của stream/VOD)
+        );
+
+        if (notificationResult && notificationResult.success) {
+          logger.info(
+            `Job ${job.id}: Notification sent successfully to follower ${follower.id} for entity ${entity?.id}.`
+          );
+          successfulNotifications++;
+        } else {
+          logger.error(
+            `Job ${job.id}: Failed to send notification to follower ${follower.id} for entity ${entity?.id}. Reason: ${notificationResult?.reason}`
+          );
+          failedNotifications++;
+        }
+      } catch (error) {
+        logger.error(
+          `Job ${job.id}: Error processing follower ${follower.id} for entity ${entity?.id}:`,
+          error
+        );
+        failedNotifications++;
+      }
+    }
+    logger.info(
+      `Job ${job.id} finished. Successful: ${successfulNotifications}, Failed: ${failedNotifications} for action: ${actionType}, entity: ${entity?.id}`
+    );
+    return {
+      success: true,
+      processed: followers.length,
+      successful: successfulNotifications,
+      failed: failedNotifications,
+    };
+  },
+  {
+    connection: redisClient,
+    concurrency: 4, // Xử lý 4 jobs đồng thời
+    removeOnComplete: { count: 1000 }, // Giữ lại 1000 job hoàn thành gần nhất
+    removeOnFail: { count: 5000 }, // Giữ lại 5000 job thất bại gần nhất
+  }
+);
+
+worker.on("completed", (job, result) => {
+  logger.info(`Worker: Job ${job.id} has completed. Result:`, result);
+});
+
+worker.on("failed", (job, err) => {
+  logger.error(
+    `Worker: Job ${job.id} has failed with error: ${err.message}`,
+    err.stack
+  );
+});
+
+worker.on("error", (err) => {
+  logger.error("Worker: Encountered an error:", err);
+});
+
+logger.info("Notification worker started successfully.");
+
+export default worker;
 ```
 
 ## File: migrations/20250601233824-add-categoryId-to-vods-table.js
@@ -1773,6 +1754,40 @@ export async function handleStreamRecordDone(req, res) {
 }
 ```
 
+## File: src/lib/redis.js
+```javascript
+import Redis from "ioredis";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const redisClient = new Redis({
+  host: process.env.REDIS_HOST || "127.0.0.1",
+  port: process.env.REDIS_PORT || 6379,
+  password: process.env.REDIS_PASSWORD || undefined,
+  maxRetriesPerRequest: null,
+  enableReadyCheck: true,
+});
+
+redisClient.on("connect", async () => {
+  console.log("Connected to Redis successfully!");
+  // Kiểm tra kết nối bằng ping
+  try {
+    const pong = await redisClient.ping();
+    console.log("Redis ping response:", pong); // pong sẽ là "PONG"
+  } catch (pingError) {
+    console.error("Redis ping failed:", pingError);
+  }
+});
+
+redisClient.on("error", (err) => {
+  console.error("Could not connect to Redis:", err);
+  // Cân nhắc việc xử lý lỗi ở đây, ví dụ: thoát ứng dụng hoặc chạy ở chế độ không cache
+});
+
+export default redisClient;
+```
+
 ## File: src/routes/categoryRoutes.js
 ```javascript
 import express from "express";
@@ -1810,6 +1825,324 @@ router.get(
 // router.post("/suggest", authMiddleware, ...categoryController.suggestCategory);
 
 export default router;
+```
+
+## File: src/services/notificationService.js
+```javascript
+import { User, Notification, sequelize } from "../models/index.js";
+// import { redisClient } from '../lib/redis.js'; // TODO: Sẽ uncomment khi triển khai Redis
+// import { io } from '../index.js'; // Cần io instance từ src/index.js, hoặc truyền vào, hoặc dùng event emitter
+import { AppError } from "../utils/errorHandler.js";
+import logger from "../utils/logger.js"; // Thêm logger
+
+// Placeholder cho io instance, sẽ cần giải pháp tốt hơn để tránh circular dependency
+// hoặc truyền io vào các hàm cần thiết.
+let ioInstance = null;
+export const setIoInstance = (io) => {
+  ioInstance = io;
+  logger.info("Socket.IO instance set in notificationService");
+};
+
+const notificationService = {
+  createNotification: async (
+    userId, // Người nhận thông báo
+    type, // Loại thông báo: new_follower, stream_started, new_vod
+    message, // Nội dung thông báo
+    relatedEntityId = null, // ID của user (new_follower), stream (stream_started), vod (new_vod)
+    relatedEntityType = null, // "user", "stream", "vod"
+    creatorUsername = null, // Username của người tạo sự kiện (người follow, người stream, người upload VOD)
+    // Đối với new_follower, đây là username của người đã follow (actor).
+    // Đối với stream_started/new_vod, đây là username của người stream/upload VOD (actor).
+    actorUserId = null, // ID của người tạo ra hành động (actor)
+    entityTitle = null // Tiêu đề của stream/VOD, nếu có
+  ) => {
+    try {
+      const recipientUser = await User.findByPk(userId);
+      if (!recipientUser) {
+        logger.warn(
+          `Attempted to create notification for non-existent user ID: ${userId}`
+        );
+        return { success: false, reason: "user_not_found" };
+      }
+
+      const notificationData = {
+        userId,
+        type,
+        message,
+        relatedEntityId,
+        relatedEntityType,
+        // actorUserId và entityTitle không trực tiếp lưu vào Notification model theo schema hiện tại
+        // Chúng sẽ được dùng để xây dựng payload cho socket
+      };
+
+      const notification = await Notification.create(notificationData);
+      logger.info(
+        `Notification created for user ${userId}, type ${type}, ID: ${notification.id}`
+      );
+
+      if (ioInstance) {
+        const notificationRoom = `notification:${userId}`;
+
+        const payload = {
+          ...notification.toJSON(),
+        };
+
+        // Thêm thông tin actor và entity vào payload dựa trên type
+        if (type === "new_follower" && creatorUsername && relatedEntityId) {
+          // relatedEntityId ở đây là ID của người đã follow (actor)
+          payload.actor = { id: relatedEntityId, username: creatorUsername };
+        } else if (type === "stream_started" || type === "new_vod") {
+          if (actorUserId && creatorUsername) {
+            // creatorUsername ở đây là username của actor
+            payload.actor = { id: actorUserId, username: creatorUsername };
+          }
+          if (relatedEntityId && entityTitle) {
+            payload.entity = { id: relatedEntityId, title: entityTitle };
+          }
+        }
+
+        ioInstance.to(notificationRoom).emit("new_notification", payload);
+        logger.info(
+          `Emitted 'new_notification' to room ${notificationRoom} with payload:`,
+          payload
+        );
+      } else {
+        logger.warn(
+          "ioInstance not set in notificationService, cannot emit real-time notification."
+        );
+      }
+      return { success: true, notification };
+    } catch (error) {
+      logger.error(
+        `Error in createNotification for user ${userId}, type ${type}:`,
+        error
+      );
+      return {
+        success: false,
+        reason: "internal_server_error",
+        error: error.message,
+      };
+    }
+  },
+
+  getNotifications: async (userId, page = 1, limit = 10, isRead) => {
+    try {
+      const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const whereClause = { userId };
+      if (isRead !== undefined && (isRead === true || isRead === "true")) {
+        whereClause.isRead = true;
+      } else if (
+        isRead !== undefined &&
+        (isRead === false || isRead === "false")
+      ) {
+        whereClause.isRead = false;
+      }
+
+      const { count, rows } = await Notification.findAndCountAll({
+        where: whereClause,
+        limit: parseInt(limit, 10),
+        offset,
+        order: [["createdAt", "DESC"]],
+        // TODO: Cân nhắc include User (relatedEntity) nếu type là 'new_follower' để hiển thị username người follow
+        // include: [
+        //   {
+        //     model: User,
+        //     as: 'relatedUser', // Cần định nghĩa association này nếu muốn dùng
+        //     required: false,
+        //     where: { '$Notification.relatedEntityType$': 'user' }
+        //   }
+        // ]
+      });
+
+      return {
+        notifications: rows,
+        totalItems: count,
+        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        currentPage: parseInt(page, 10),
+      };
+    } catch (error) {
+      logger.error(`Error in getNotifications for user ${userId}:`, error);
+      throw new AppError("Could not retrieve notifications", 500, error);
+    }
+  },
+
+  markNotificationAsRead: async (notificationId, userId) => {
+    try {
+      const notification = await Notification.findOne({
+        where: { id: notificationId, userId },
+      });
+
+      if (!notification) {
+        throw new AppError("Notification not found or not owned by user", 404);
+      }
+
+      if (notification.isRead) {
+        return {
+          success: true,
+          message: "Notification already marked as read",
+          notification,
+        };
+      }
+
+      notification.isRead = true;
+      await notification.save();
+
+      // TODO: Cập nhật Redis
+      // const unreadCount = await Notification.count({ where: { userId, isRead: false } });
+      // await redisClient.set(`user:notifications:unread:${userId}`, unreadCount);
+
+      logger.info(
+        `Notification ${notificationId} marked as read for user ${userId}`
+      );
+      return {
+        success: true,
+        message: "Notification marked as read",
+        notification,
+      };
+    } catch (error) {
+      logger.error(
+        `Error in markNotificationAsRead for notification ${notificationId}:`,
+        error
+      );
+      if (error instanceof AppError) throw error;
+      throw new AppError("Could not mark notification as read", 500, error);
+    }
+  },
+
+  markAllNotificationsAsRead: async (userId) => {
+    try {
+      const [affectedCount] = await Notification.update(
+        { isRead: true },
+        { where: { userId, isRead: false }, returning: false } // returning: false vì không cần lấy lại bản ghi
+      );
+
+      // TODO: Cập nhật Redis
+      // await redisClient.set(`user:notifications:unread:${userId}`, 0);
+
+      logger.info(
+        `All unread notifications marked as read for user ${userId}. Count: ${affectedCount}`
+      );
+      return {
+        success: true,
+        message: "All notifications marked as read",
+        affectedCount,
+      };
+    } catch (error) {
+      logger.error(
+        `Error in markAllNotificationsAsRead for user ${userId}:`,
+        error
+      );
+      throw new AppError(
+        "Could not mark all notifications as read",
+        500,
+        error
+      );
+    }
+  },
+
+  getUnreadNotificationCount: async (userId) => {
+    // TODO: Lấy từ Redis trước, nếu không có thì query DB và cache lại
+    try {
+      // const cachedCount = await redisClient.get(`user:notifications:unread:${userId}`);
+      // if (cachedCount !== null) return parseInt(cachedCount, 10);
+
+      const count = await Notification.count({
+        where: { userId, isRead: false },
+      });
+      // await redisClient.set(`user:notifications:unread:${userId}`, count);
+      return count;
+    } catch (error) {
+      logger.error(
+        `Error in getUnreadNotificationCount for user ${userId}:`,
+        error
+      );
+      // Trả về 0 nếu có lỗi để không làm crash flow, nhưng cần log
+      return 0;
+    }
+  },
+
+  // Hàm này sẽ được gọi từ streamService hoặc vodService
+  notifyFollowers: async (actorUser, actionType, entity, messageGenerator) => {
+    // actorUser: User object của người thực hiện hành động (e.g., người bắt đầu stream)
+    // actionType: 'stream_started', 'new_vod'
+    // entity: Stream object hoặc VOD object
+    // messageGenerator: function(followerUsername, actorUsername, entityTitle) => "message string"
+
+    try {
+      logger.info(
+        `Attempting to notify followers for actor ${actorUser.username} (ID: ${actorUser.id}), action: ${actionType}`
+      );
+      // Đây là một phần phụ thuộc vào followService.getFollowers
+      // Tạm thời chúng ta sẽ cần một cách để lấy ID của tất cả follower
+      // Giả sử followService có hàm getFollowerIds(userId)
+      const { default: followService } = await import("./followService.js"); // Dynamic import để tránh circular dependency
+
+      const followers = await followService.getFollowersInternal(
+        actorUser.id,
+        null,
+        null,
+        true
+      ); // Lấy tất cả follower, chỉ cần id, username
+
+      if (!followers || followers.length === 0) {
+        logger.info(
+          `No followers found for user ${actorUser.username} (ID: ${actorUser.id}) to notify for ${actionType}.`
+        );
+        return;
+      }
+
+      logger.info(
+        `Found ${followers.length} followers for ${actorUser.username} (ID: ${actorUser.id}). Preparing to send ${actionType} notifications.`
+      );
+
+      for (const followRelation of followers) {
+        // followRelation là bản ghi từ bảng Follows, follower là User object đã include
+        const followerUser = followRelation.follower;
+        if (!followerUser || !followerUser.id) {
+          logger.warn(
+            `Follower user data missing for follow relation ID: ${followRelation.id}`
+          );
+          continue;
+        }
+
+        const message = messageGenerator(
+          followerUser.username, // follower's username
+          actorUser.username, // actor's username
+          entity.title ||
+            (entityType === "stream"
+              ? `Stream by ${actorUser.username}`
+              : "New Content") // entity's title or default
+        );
+
+        let relatedEntityType = null;
+        if (actionType === "stream_started") relatedEntityType = "stream";
+        else if (actionType === "new_vod") relatedEntityType = "vod";
+
+        await notificationService.createNotification(
+          followerUser.id, // Người nhận thông báo
+          actionType,
+          message,
+          entity.id, // ID của Stream hoặc VOD
+          relatedEntityType, // 'stream' hoặc 'vod'
+          actorUser.username, // Username của người tạo sự kiện (người bắt đầu stream/tạo VOD)
+          actorUser.id, // ID của người tạo ra hành động (actor)
+          entity.title // Tiêu đề của stream/VOD, nếu có
+        );
+      }
+      logger.info(
+        `Successfully queued notifications for ${actionType} from actor ${actorUser.id} to their followers.`
+      );
+    } catch (error) {
+      logger.error(
+        `Error in notifyFollowers for actor ${actorUser.id}, action ${actionType}:`,
+        error
+      );
+      // Không re-throw để không làm crash tiến trình chính (stream/VOD creation)
+    }
+  },
+};
+
+export default notificationService;
 ```
 
 ## File: src/utils/videoUtils.js
@@ -5681,100 +6014,6 @@ export const vodController = {
 };
 ```
 
-## File: src/index.js
-```javascript
-import express from "express";
-import bodyParser from "body-parser";
-import cors from "cors";
-import dotenv from "dotenv";
-import http from "http";
-import { Server } from "socket.io";
-import sequelize from "./config/database.js";
-import { connectMongoDB } from "./config/mongodb.js";
-import userRoutes from "./routes/userRoutes.js";
-import streamRoutes from "./routes/streamRoutes.js";
-import webhookRoutes from "./routes/webhookRoutes.js";
-import chatRoutes from "./routes/chatRoutes.js";
-import vodRoutes from "./routes/vodRoutes.js";
-import initializeSocketHandlers from "./socketHandlers.js";
-import { setIoInstance as setNotificationServiceIo } from "./services/notificationService.js";
-// Import category routes
-import categoryRoutes from "./routes/categoryRoutes.js";
-import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
-import followRoutes from "./routes/followRoutes.js";
-import notificationRoutes from "./routes/notificationRoutes.js";
-
-dotenv.config();
-
-const app = express();
-const server = http.createServer(app);
-
-// Initialize Socket.IO server
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["my-custom-header"],
-    credentials: true,
-  },
-});
-
-setNotificationServiceIo(io);
-
-// Middleware
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "*",
-    credentials: true,
-  })
-);
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Routes
-app.use("/api/users", userRoutes);
-app.use("/api/social", followRoutes);
-app.use("/api/streams", streamRoutes);
-app.use("/api/webhook", webhookRoutes);
-app.use("/api/chat", chatRoutes);
-app.use("/api/vod", vodRoutes);
-app.use("/api/notifications", notificationRoutes);
-// Add category routes
-app.use("/api/categories", categoryRoutes);
-app.use("/api/admin/categories", categoryAdminRoutes);
-
-// Base route
-app.get("/", (req, res) => {
-  res.json({ message: "Welcome to Livestream API" });
-});
-
-// Database connection and server start
-const PORT = process.env.PORT || 5000;
-
-// Initialize Socket.IO handlers (example, actual implementation might differ)
-initializeSocketHandlers(io);
-
-// Kết nối cơ sở dữ liệu
-const startServer = async () => {
-  try {
-    await sequelize.sync();
-    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
-
-    await connectMongoDB(); // Kết nối MongoDB
-
-    server.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Socket.IO initialized and listening on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error("Unable to connect to the database(s):", error);
-    process.exit(1); // Thoát nếu không kết nối được DB chính
-  }
-};
-
-startServer();
-```
-
 ## File: src/services/userService.js
 ```javascript
 import bcrypt from "bcrypt";
@@ -6110,6 +6349,133 @@ export const getAllUsers = async () => {
 };
 ```
 
+## File: src/index.js
+```javascript
+import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
+import dotenv from "dotenv";
+import http from "http";
+import { Server } from "socket.io";
+import sequelize from "./config/database.js";
+import { connectMongoDB } from "./config/mongodb.js";
+import userRoutes from "./routes/userRoutes.js";
+import streamRoutes from "./routes/streamRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
+import chatRoutes from "./routes/chatRoutes.js";
+import vodRoutes from "./routes/vodRoutes.js";
+import initializeSocketHandlers from "./socketHandlers.js";
+import { setIoInstance as setNotificationServiceIo } from "./services/notificationService.js";
+// Import category routes
+import categoryRoutes from "./routes/categoryRoutes.js";
+import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
+import followRoutes from "./routes/followRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
+// Import BullMQ Worker
+import notificationWorker from "./workers/notificationWorker.js"; // Worker sẽ tự khởi động khi được import
+// Import logger
+import logger from "./utils/logger.js";
+// Import Bull Board
+import { createBullBoard } from "@bull-board/api";
+import { BullMQAdapter } from "@bull-board/api/bullMQAdapter.js";
+import { ExpressAdapter } from "@bull-board/express";
+// Import your queue
+import notificationQueue from "./queues/notificationQueue.js";
+
+dotenv.config();
+
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.IO server
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "*",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["my-custom-header"],
+    credentials: true,
+  },
+});
+
+setNotificationServiceIo(io);
+
+// Bull Board setup
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath("/admin/queues");
+
+createBullBoard({
+  queues: [new BullMQAdapter(notificationQueue)],
+  serverAdapter: serverAdapter,
+});
+
+app.use("/admin/queues", serverAdapter.getRouter());
+
+// Middleware
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "*",
+    credentials: true,
+  })
+);
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Routes
+app.use("/api/users", userRoutes);
+app.use("/api/social", followRoutes);
+app.use("/api/streams", streamRoutes);
+app.use("/api/webhook", webhookRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/vod", vodRoutes);
+app.use("/api/notifications", notificationRoutes);
+// Add category routes
+app.use("/api/categories", categoryRoutes);
+app.use("/api/admin/categories", categoryAdminRoutes);
+
+// Base route
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Livestream API" });
+});
+
+// Database connection and server start
+const PORT = process.env.PORT || 5000;
+
+// Initialize Socket.IO handlers (example, actual implementation might differ)
+initializeSocketHandlers(io);
+
+// Kết nối cơ sở dữ liệu
+const startServer = async () => {
+  try {
+    await sequelize.sync();
+    logger.info("Database (PostgreSQL/Sequelize) connected successfully.");
+
+    await connectMongoDB(); // Kết nối MongoDB
+    // logger.info("MongoDB connected successfully."); // Thêm log cho MongoDB nếu connectMongoDB không có log riêng
+
+    server.listen(PORT, () => {
+      logger.info(`Server is running on port ${PORT}`);
+      logger.info(`Socket.IO initialized and listening on port ${PORT}`);
+      // Log xác nhận worker đã được load và (ngầm) khởi động
+      if (notificationWorker) {
+        logger.info("Notification Worker has been loaded and is running.");
+      }
+      // Log cho Bull Board
+      logger.info(
+        `Bull Board is available at http://localhost:${PORT}/admin/queues`
+      );
+    });
+  } catch (error) {
+    logger.error(
+      "Unable to connect to the database(s) or start server:",
+      error
+    );
+    process.exit(1); // Thoát nếu không kết nối được DB chính
+  }
+};
+
+startServer();
+```
+
 ## File: src/services/vodService.js
 ```javascript
 import { VOD, User, Stream, Category } from "../models/index.js";
@@ -6134,6 +6500,8 @@ import { Sequelize } from "sequelize";
 import redisClient from "../lib/redis.js";
 import notificationService from "./notificationService.js";
 import logger from "../utils/logger.js";
+import notificationQueue from "../queues/notificationQueue.js";
+import followService from "./followService.js";
 
 dotenv.config();
 
@@ -6652,10 +7020,43 @@ const processRecordedFileToVOD = async ({
       videoUrl: "HIDDEN",
       thumbnailUrl: vodData.thumbnailUrl ? "HIDDEN" : null,
     });
-    const newVOD = await createVOD(vodData);
-    logger.info(`VOD entry created with ID: ${newVOD.id}`);
+    const newVod = await createVOD(vodData);
+    logger.info(`Service: VOD đã được tạo trong DB với ID: ${newVod.id}`);
 
-    return newVOD;
+    // 7. Dọn dẹp file tạm (FLV, MP4, thumbnail nếu được extract mới)
+    // File FLV gốc (originalFilePath) thường sẽ được xóa bởi script gọi processRecordedFileToVOD
+    // (ví dụ: script hook của nginx-rtmp sau khi stream kết thúc và file đã được xử lý)
+    // Tuy nhiên, nếu nó được thêm vào tempFilesToDeleteOnError ở đầu, nó sẽ được xóa ở đây nếu không có lỗi nào khác.
+    // Không xóa originalFilePath ở đây nữa, để cho script ngoài quản lý.
+    // Chỉ xóa mp4FilePath và localThumbnailToUploadPath (nếu có)
+    if (mp4FilePath) {
+      fs.unlink(mp4FilePath).catch((err) =>
+        logger.warn(
+          `Failed to delete temporary MP4 file ${mp4FilePath}: ${err}`
+        )
+      );
+    }
+    if (localThumbnailToUploadPath) {
+      // Đã được thêm vào tempFilesToDeleteOnError nếu được tạo
+      // fs.unlink(localThumbnailToUploadPath).catch((err) => logger.warn(`Failed to delete temporary thumbnail file ${localThumbnailToUploadPath}: ${err}`));
+      // Không cần xóa lại ở đây vì nó đã có trong tempFilesToDeleteOnError và sẽ được xử lý ở khối catch nếu có lỗi trước đó,
+      // hoặc sẽ được xóa sau nếu thành công (logic này nên được xem lại)
+      // Hiện tại, ta sẽ xóa nó một cách tường minh nếu nó được tạo và không có lỗi gì nghiêm trọng trước đó.
+      // Quyết định: Sẽ xóa localThumbnailToUploadPath ở cuối nếu nó được tạo.
+      // Điều này đã được xử lý bởi logic `tempFilesToDeleteOnError` và khối catch.
+      // Nếu không có lỗi, chúng ta vẫn nên dọn dẹp.
+      // File thumbnail đã được upload, file tạm trên disk không cần nữa.
+      fs.unlink(localThumbnailToUploadPath).catch((err) =>
+        logger.warn(
+          `Failed to delete temporary extracted thumbnail file ${localThumbnailToUploadPath}: ${err}`
+        )
+      );
+    }
+
+    logger.info(
+      `Service: Xử lý VOD từ file ghi ${originalFileName} thành công. VOD ID: ${newVod.id}`
+    );
+    return newVod;
   } catch (error) {
     logger.error(
       `Error in processRecordedFileToVOD for streamKey ${streamKey}:`,
@@ -6802,24 +7203,63 @@ const createVOD = async (vodData) => {
       });
       if (actorUser) {
         logger.info(
-          `New VOD created (ID: ${newVOD.id}), preparing to notify followers of user ${actorUser.username} (ID: ${actorUser.id})`
+          `New VOD created (ID: ${newVOD.id}), preparing to notify followers of user ${actorUser.username} (ID: ${actorUser.id}) via BullMQ`
         );
-        notificationService
-          .notifyFollowers(
-            actorUser, // actorUser (User object)
-            "new_vod", // actionType
-            newVOD, // entity (VOD object, có id và title)
-            (followerUsername, actorUsername, entityTitle) =>
-              `${actorUsername} has published a new VOD: ${
-                entityTitle || "New Video"
-              }!`
-          )
-          .catch((err) => {
-            logger.error(
-              `Failed to notify followers for new VOD ${newVOD.id} (user: ${actorUser.id}):`,
-              err
+        try {
+          const allFollows = await followService.getFollowersInternal(
+            actorUser.id
+          );
+          const followers = allFollows
+            .map((follow) => follow.follower) // Lấy object follower từ mỗi mục follow
+            .filter((follower) => follower && follower.id && follower.username); // Lọc những follower hợp lệ
+
+          if (followers.length > 0) {
+            const batchSize = 10; // Or your preferred batch size
+            for (let i = 0; i < followers.length; i += batchSize) {
+              const batch = followers.slice(i, i + batchSize);
+              const jobData = {
+                actionType: "new_vod",
+                actorUser: {
+                  // Consistent with streamService
+                  id: actorUser.id,
+                  username: actorUser.username,
+                },
+                entity: { id: newVOD.id, title: newVOD.title },
+                followers: batch.map((f) => ({
+                  // Send only necessary follower info
+                  id: f.id,
+                  username: f.username,
+                })),
+                messageTemplate: `${
+                  actorUser.username
+                } has published a new VOD: ${newVOD.title || "New Video"}!`,
+              };
+              await notificationQueue.add(
+                "process-notification-batch",
+                jobData
+              );
+              logger.info(
+                `Added new_vod notification job to queue for VOD ${
+                  newVOD.id
+                }, user ${actorUser.id}, batch ${
+                  Math.floor(i / batchSize) + 1
+                }/${Math.ceil(followers.length / batchSize)}`
+              );
+            }
+            logger.info(
+              `Successfully queued all new_vod notification jobs for VOD ${newVOD.id}, user ${actorUser.id}. Total followers: ${followers.length}`
             );
-          });
+          } else {
+            logger.info(
+              `User ${actorUser.username} (ID: ${actorUser.id}) has no followers to notify for new VOD ${newVOD.id}.`
+            );
+          }
+        } catch (notifyError) {
+          logger.error(
+            `Failed to get followers or add notification job for new VOD ${newVOD.id} (user: ${actorUser.id}):`,
+            notifyError
+          );
+        }
       } else {
         logger.warn(
           `Cannot send new_vod notification for VOD ${newVOD.id} because creator user (ID: ${newVOD.userId}) not found.`
@@ -7264,15 +7704,22 @@ const createVODFromUpload = async ({
       categoryId: categoryId,
     };
 
-    if (finalThumbnailMimeType && finalOriginalThumbnailFileName) {
-      vodToCreate.thumbnailUrl = await generatePresignedUrlForExistingFile(
-        finalOriginalThumbnailFileName,
-        parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
-          3600 * 24 * 7
+    if (b2Response.thumbnail && b2Response.thumbnail.url) {
+      vodToCreate.thumbnailUrl = b2Response.thumbnail.url;
+      vodToCreate.thumbnailUrlExpiresAt = b2Response.thumbnail.urlExpiresAt;
+      vodToCreate.b2ThumbnailFileId = b2Response.thumbnail.b2FileId;
+      vodToCreate.b2ThumbnailFileName = b2Response.thumbnail.b2FileName;
+    } else if (thumbnailStream) {
+      // Nếu thumbnail được xử lý (auto-generated hoặc provided) và upload thành công
+      // nhưng không có trong b2Response.thumbnail (ví dụ: lỗi logic ở uploadToB2AndGetPresignedUrl)
+      // thì cần đảm bảo thông tin này được lưu nếu file thực sự đã lên B2.
+      // Tuy nhiên, uploadToB2AndGetPresignedUrl nên trả về thông tin thumbnail nếu nó xử lý thumbnail.
+      // Đoạn này giả định rằng nếu thumbnailStream tồn tại, nó ĐÃ được upload và thông tin có trong b2Response.thumbnail
+      // Nếu không, cần xem lại logic của uploadToB2AndGetPresignedUrl.
+      // Hiện tại, để an toàn, nếu b2Response.thumbnail không có, ta không set các trường thumbnailUrl...
+      logger.warn(
+        `Service: Thumbnail stream existed but no thumbnail info in B2 response for VOD title: ${title}. Thumbnail might not have been uploaded or processed correctly.`
       );
-      vodToCreate.thumbnailUrlExpiresAt = new Date(Date.now() + 3600 * 1000);
-      vodToCreate.b2ThumbnailFileId = b2ThumbFileIdToDelete;
-      vodToCreate.b2ThumbnailFileName = b2ThumbFileNameToDelete;
     }
 
     logger.info("Creating VOD entry in database with data:", {
@@ -7282,6 +7729,7 @@ const createVODFromUpload = async ({
     });
     const newVOD = await createVOD(vodToCreate);
     logger.info(`Service: VOD đã được tạo trong DB với ID: ${newVOD.id}`);
+
     return newVOD;
   } catch (error) {
     logger.error("Service: Lỗi trong createVODFromUpload:", error);
@@ -7488,6 +7936,8 @@ import redisClient from "../lib/redis.js"; // Import Redis client
 import appEmitter from "../utils/appEvents.js"; // Import App Emitter
 import notificationService from "./notificationService.js"; // THÊM IMPORT
 import logger from "../utils/logger.js"; // Đảm bảo logger được import
+import notificationQueue from "../queues/notificationQueue.js"; // Thêm import cho BullMQ Queue
+import followService from "./followService.js"; // Thêm import cho followService
 
 dotenv.config();
 
@@ -8100,32 +8550,66 @@ export const markLive = async (streamKey) => {
 
       // Chỉ gửi thông báo nếu stream chuyển từ trạng thái không phải 'live' sang 'live'
       if (oldStatus !== "live") {
-        // Gửi thông báo cho followers
-        if (stream.user) {
-          // stream.user đã được include
+        if (stream.user && stream.user.id) {
           logger.info(
             `Stream ${streamKey} is now live, preparing to notify followers of user ${stream.user.username} (ID: ${stream.user.id})`
           );
-          notificationService
-            .notifyFollowers(
-              stream.user, // actorUser (User object)
-              "stream_started", // actionType
-              stream, // entity (Stream object, có id và title)
-              (followerUsername, actorUsername, entityTitle) =>
-                `${actorUsername} has started streaming: ${
-                  entityTitle || "Live Stream"
-                }!`
-            )
-            .catch((err) => {
-              // Bắt lỗi ở đây để việc gửi thông báo không làm crash luồng chính
-              logger.error(
-                `Failed to notify followers for stream ${streamKey} (user: ${stream.user.id}):`,
-                err
+
+          try {
+            const allFollows = await followService.getFollowersInternal(
+              stream.user.id
+            );
+            const followers = allFollows
+              .map((follow) => follow.follower) // Lấy object follower từ mỗi mục follow
+              .filter(
+                (follower) => follower && follower.id && follower.username
+              ); // Lọc những follower hợp lệ
+
+            if (followers.length > 0) {
+              const batchSize = 10;
+              for (let i = 0; i < followers.length; i += batchSize) {
+                const batch = followers.slice(i, i + batchSize);
+                const jobData = {
+                  actionType: "stream_started",
+                  actorUser: {
+                    id: stream.user.id,
+                    username: stream.user.username,
+                  },
+                  entity: { id: stream.id, title: stream.title },
+                  followers: batch.map((f) => ({
+                    id: f.id,
+                    username: f.username,
+                  })), // Chỉ gửi id và username
+                  messageTemplate: `${
+                    stream.user.username
+                  } has started streaming: ${stream.title || "Live Stream"}!`,
+                };
+                await notificationQueue.add(
+                  "process-notification-batch",
+                  jobData
+                );
+                logger.info(
+                  `Added notification job to queue for stream ${
+                    stream.id
+                  }, batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(
+                    followers.length / batchSize
+                  )}`
+                );
+              }
+            } else {
+              logger.info(
+                `User ${stream.user.id} has no followers to notify for stream ${stream.id}.`
               );
-            });
+            }
+          } catch (notifyError) {
+            logger.error(
+              `Failed to get followers or add notification job for stream ${streamKey} (user: ${stream.user.id}):`,
+              notifyError
+            );
+          }
         } else {
           logger.warn(
-            `Cannot send stream_started notification for stream ${streamKey} because user info is missing.`
+            `Cannot send stream_started notification for stream ${streamKey} because user info is missing or invalid.`
           );
         }
       }

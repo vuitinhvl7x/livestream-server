@@ -7,6 +7,7 @@ import {
 import {
   register,
   login,
+  logout,
   updateProfile,
   getMyProfile,
   getAllUsersController,
@@ -21,6 +22,7 @@ router.post("/register", validateUserRegistration, register);
 router.post("/login", validateUserLogin, login);
 
 // Protected routes (require authentication)
+router.post("/logout", authenticateToken, logout);
 router.get("/me", authenticateToken, getMyProfile);
 router.get(
   "/all",

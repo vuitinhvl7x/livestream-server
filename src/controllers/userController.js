@@ -5,6 +5,7 @@ import {
   updateUserProfile,
   getUserProfileById,
   getAllUsers,
+  logoutUser,
 } from "../services/userService.js";
 
 export const register = async (req, res) => {
@@ -53,6 +54,25 @@ export const login = async (req, res) => {
     });
   } catch (error) {
     res.status(401).json({ error: error.message });
+  }
+};
+
+export const logout = async (req, res) => {
+  try {
+    // Token và payload được gắn vào req từ middleware authenticateToken
+    const { token, tokenPayload } = req;
+    if (!token || !tokenPayload) {
+      return res
+        .status(400)
+        .json({ message: "Authentication context is missing." });
+    }
+
+    await logoutUser(token, tokenPayload);
+
+    res.status(200).json({ message: "Logged out successfully." });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
   }
 };
 

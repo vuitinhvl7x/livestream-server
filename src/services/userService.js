@@ -11,6 +11,7 @@ import fsSync from "fs";
 import { AppError, handleServiceError } from "../utils/errorHandler.js";
 import path from "path";
 import dotenv from "dotenv";
+import { TokenBlacklist } from "../models/index.js";
 
 dotenv.config();
 
@@ -327,5 +328,26 @@ export const getAllUsers = async () => {
       `Could not retrieve users: ${error.message}`,
       error.statusCode || 500
     );
+  }
+};
+
+export const logoutUser = async (token, tokenPayload) => {
+  try {
+    const expiresAt = new Date(tokenPayload.exp * 1000);
+    await TokenBlacklist.create({
+      token,
+      expiresAt,
+    });
+    logger.info(
+      `Token for user ${tokenPayload.username} has been blacklisted.`
+    );
+  } catch (error) {
+    // Nếu token đã tồn tại trong blacklist, không cần báo lỗi nghiêm trọng
+    if (error.name === "SequelizeUniqueConstraintError") {
+      logger.warn(`Attempted to blacklist an already blacklisted token.`);
+      return;
+    }
+    logger.error(`Error blacklisting token: ${error.message}`);
+    throw new AppError("Could not log out user.", 500);
   }
 };
