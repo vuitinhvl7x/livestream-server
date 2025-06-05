@@ -1,5 +1,6 @@
 import Redis from "ioredis";
 import dotenv from "dotenv";
+import logger from "../utils/logger.js";
 
 dotenv.config();
 
@@ -12,18 +13,18 @@ const redisClient = new Redis({
 });
 
 redisClient.on("connect", async () => {
-  console.log("Connected to Redis successfully!");
+  logger.info("Connected to Redis successfully!");
   // Kiểm tra kết nối bằng ping
   try {
     const pong = await redisClient.ping();
-    console.log("Redis ping response:", pong); // pong sẽ là "PONG"
+    logger.info("Redis ping response:", pong); // pong sẽ là "PONG"
   } catch (pingError) {
-    console.error("Redis ping failed:", pingError);
+    logger.error("Redis ping failed:", pingError);
   }
 });
 
 redisClient.on("error", (err) => {
-  console.error("Could not connect to Redis:", err);
+  logger.error("Could not connect to Redis:", err);
   // Cân nhắc việc xử lý lỗi ở đây, ví dụ: thoát ứng dụng hoặc chạy ở chế độ không cache
 });
 

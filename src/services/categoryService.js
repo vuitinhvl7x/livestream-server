@@ -11,13 +11,9 @@ import path from "path";
 import slugify from "slugify";
 import dotenv from "dotenv";
 import { Op } from "sequelize";
+import logger from "../utils/logger.js";
 
 dotenv.config();
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
 
 const B2_PRESIGNED_URL_DURATION_IMAGES =
   parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||

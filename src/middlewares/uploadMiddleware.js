@@ -2,21 +2,22 @@ import multer from "multer";
 import path from "path";
 import fs from "fs"; // Thêm fs để kiểm tra và tạo thư mục
 import dotenv from "dotenv"; // Thêm dotenv
+import logger from "../utils/logger.js";
 
 dotenv.config(); // Tải biến môi trường
 
 // Đọc đường dẫn thư mục tạm từ biến môi trường
 const tempUploadDir = process.env.TMP_UPLOAD_DIR;
 
-console.log(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
+logger.info(`Thư mục upload tạm thời được cấu hình là: ${tempUploadDir}`); // Ghi log để kiểm tra
 
 // Đảm bảo thư mục uploads/tmp tồn tại
 if (!fs.existsSync(tempUploadDir)) {
   try {
     fs.mkdirSync(tempUploadDir, { recursive: true });
-    console.log(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
+    logger.info(`Thư mục tạm được tạo tại: ${tempUploadDir}`);
   } catch (err) {
-    console.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
+    logger.error(`Lỗi khi tạo thư mục tạm tại ${tempUploadDir}:`, err);
     throw new Error(`Không thể tạo thư mục upload tạm: ${tempUploadDir}`);
   }
 }

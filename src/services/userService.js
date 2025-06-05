@@ -12,14 +12,9 @@ import { AppError, handleServiceError } from "../utils/errorHandler.js";
 import path from "path";
 import dotenv from "dotenv";
 import { TokenBlacklist } from "../models/index.js";
+import logger from "../utils/logger.js";
 
 dotenv.config();
-
-const logger = {
-  info: console.log,
-  error: console.error,
-  warn: console.warn,
-};
 
 const generateToken = (user) => {
   return jwt.sign(

@@ -1,13 +1,14 @@
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import { TokenBlacklist } from "../models/index.js";
+import logger from "../utils/logger.js";
 
 dotenv.config(); // Đảm bảo các biến môi trường từ .env được load
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!JWT_SECRET) {
-  console.error("FATAL ERROR: JWT_SECRET is not defined in .env file.");
+  logger.error("FATAL ERROR: JWT_SECRET is not defined in .env file.");
   process.exit(1); // Thoát ứng dụng nếu JWT_SECRET không được cấu hình
 }
 
@@ -38,7 +39,7 @@ const authenticateToken = async (req, res, next) => {
 
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
       if (err) {
-        console.error("JWT verification error:", err.message);
+        logger.error("JWT verification error:", err.message);
         if (err.name === "TokenExpiredError") {
           return res.status(401).json({ message: "Access token expired." });
         }
@@ -59,11 +60,11 @@ const authenticateToken = async (req, res, next) => {
       req.token = token;
       req.tokenPayload = decoded;
 
-      console.log("User authenticated via JWT:", req.user);
+      logger.debug("User authenticated via JWT:", req.user);
       next();
     });
   } catch (error) {
-    console.error("Error during token authentication:", error);
+    logger.error("Error during token authentication:", error);
     return res
       .status(500)
       .json({ message: "Internal server error during authentication." });
@@ -77,11 +78,11 @@ export default authenticateToken;
 //   const signature = req.headers["x-webhook-signature"];
 //   // Giả sử bạn sẽ lưu WEBHOOK_SECRET trong file .env
 //   if (!process.env.WEBHOOK_SECRET) {
-//     console.error("FATAL ERROR: WEBHOOK_SECRET is not defined in .env file.");
+//     logger.error("FATAL ERROR: WEBHOOK_SECRET is not defined in .env file.");
 //     return res.status(500).json({ message: "Webhook secret not configured." });
 //   }
 //   if (signature !== process.env.WEBHOOK_SECRET) {
-//     console.warn("Invalid webhook signature received:", signature);
+//     logger.warn("Invalid webhook signature received:", signature);
 //     return res.status(401).json({ message: "Invalid webhook signature." });
 //   }
 //   next();
@@ -92,7 +93,7 @@ export function verifyWebhookTokenInParam(req, res, next) {
   const expectedToken = process.env.WEBHOOK_SECRET_TOKEN;
 
   if (!expectedToken) {
-    console.error(
+    logger.error(
       "FATAL ERROR: WEBHOOK_SECRET_TOKEN is not defined in .env file."
     );
     return res
@@ -103,7 +104,7 @@ export function verifyWebhookTokenInParam(req, res, next) {
   if (receivedToken === expectedToken) {
     next();
   } else {
-    console.warn("Invalid webhook token received in URL param:", receivedToken);
+    logger.warn("Invalid webhook token received in URL param:", receivedToken);
     return res.status(403).json({ message: "Invalid webhook token." });
   }
 }

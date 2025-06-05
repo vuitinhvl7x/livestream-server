@@ -2,6 +2,7 @@ import { Sequelize } from "sequelize";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
+import logger from "../utils/logger.js";
 dotenv.config();
 
 // Determine the environment
@@ -38,7 +39,7 @@ const sequelize = new Sequelize(
   {
     host: process.env.DB_HOST,
     dialect: config.dialect,
-    logging: false, // Set to console.log to see SQL queries
+    logging: (msg) => logger.info(msg),
     pool: {
       max: 5,
       min: 0,

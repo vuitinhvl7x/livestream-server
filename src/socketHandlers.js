@@ -12,6 +12,7 @@ import {
   // getLiveViewerCount, // Không cần trực tiếp ở đây nữa nếu viewer_count_updated gửi count
 } from "./services/streamService.js"; // Import stream service functions
 import appEmitter from "./utils/appEvents.js"; // Sửa đường dẫn import
+import logger from "./utils/logger.js";
 
 dotenv.config();
 
@@ -22,12 +23,6 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 // Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
 // const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
-
-const logger = {
-  info: console.log,
-  error: console.error,
-  warn: console.warn,
-}; // Basic logger
 
 const initializeSocketHandlers = (io) => {
   // Middleware xác thực JWT cho Socket.IO

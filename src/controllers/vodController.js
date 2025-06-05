@@ -12,11 +12,7 @@ import {
 } from "../utils/videoUtils.js"; // Thêm generateThumbnailFromVideo
 import path from "path";
 import fs from "fs/promises"; // Thêm fs để xóa file tạm
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
+import logger from "../utils/logger.js";
 
 /**
  * @route   POST /api/vod/upload

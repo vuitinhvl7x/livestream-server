@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import redisClient from "../lib/redis.js";
+import logger from "../utils/logger.js";
 
 const queueName = "notification-tasks";
 
@@ -26,19 +27,19 @@ const notificationQueue = new Queue(queueName, {
 });
 
 notificationQueue.on("waiting", (jobId) => {
-  console.log(`A job with ID ${jobId} is waiting.`);
+  logger.info(`A job with ID ${jobId} is waiting.`);
 });
 
 notificationQueue.on("active", (job) => {
-  console.log(`Job ${job.id} is now active.`);
+  logger.info(`Job ${job.id} is now active.`);
 });
 
 notificationQueue.on("completed", (job, result) => {
-  console.log(`Job ${job.id} completed with result ${result}`);
+  logger.info(`Job ${job.id} completed with result ${result}`);
 });
 
 notificationQueue.on("failed", (job, err) => {
-  console.log(`Job ${job.id} failed with error ${err.message}`);
+  logger.error(`Job ${job.id} failed with error ${err.message}`);
 });
 
 export default notificationQueue;

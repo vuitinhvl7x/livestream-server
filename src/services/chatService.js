@@ -1,4 +1,5 @@
 import ChatMessage from "../models/mongo/ChatMessage.js";
+import logger from "../utils/logger.js";
 
 /**
  * Lưu một tin nhắn chat mới vào MongoDB.
@@ -10,7 +11,7 @@ export const saveChatMessage = async (messageData) => {
   try {
     // Chỉ lưu nếu MONGODB_URI được cấu hình (nghĩa là MongoDB đã kết nối)
     if (!process.env.MONGODB_URI) {
-      console.log(
+      logger.info(
         `Chat message from ${messageData.username} for stream ${messageData.streamId} (not saved - MongoDB not configured).`
       );
       // Trả về dữ liệu gốc với timestamp giả lập nếu không lưu DB
@@ -19,12 +20,12 @@ export const saveChatMessage = async (messageData) => {
 
     const chatEntry = new ChatMessage(messageData);
     await chatEntry.save();
-    console.log(
+    logger.info(
       `Message from ${messageData.username} in room ${messageData.streamId} saved to DB.`
     );
     return chatEntry.toObject(); // Trả về plain object
   } catch (error) {
-    console.error("Error saving chat message in service:", error);
+    logger.error("Error saving chat message in service:", error);
     throw new Error("Failed to save chat message: " + error.message);
   }
 };
@@ -42,9 +43,7 @@ export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
 
   try {
     if (!process.env.MONGODB_URI) {
-      console.warn(
-        "Attempted to get chat history, but MONGODB_URI is not set."
-      );
+      logger.warn("Attempted to get chat history, but MONGODB_URI is not set.");
       return {
         messages: [],
         totalPages: 0,
@@ -69,7 +68,7 @@ export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
       totalMessages,
     };
   } catch (error) {
-    console.error("Error fetching chat history in service:", error);
+    logger.error("Error fetching chat history in service:", error);
     throw new Error("Failed to fetch chat history: " + error.message);
   }
 };

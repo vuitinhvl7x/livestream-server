@@ -11,11 +11,7 @@ import { Stream, User } from "../models/index.js";
 import { AppError } from "../utils/errorHandler.js";
 import fs from "fs/promises";
 import path from "path";
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
+import logger from "../utils/logger.js";
 
 // Endpoint Tạo Mới Stream (with thumbnail upload)
 export const createStream = async (req, res, next) => {

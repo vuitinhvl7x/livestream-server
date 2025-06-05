@@ -9,11 +9,7 @@ import {
 import { validationResult, matchedData } from "express-validator";
 import { AppError } from "../utils/errorHandler.js";
 import fs from "fs/promises";
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
+import logger from "../utils/logger.js";
 
 export const createCategory = async (req, res, next) => {
   let thumbnailFilePathTemp = null;

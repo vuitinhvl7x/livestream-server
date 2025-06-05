@@ -3,6 +3,7 @@ import uploadAnyExtension from "@gideo-llc/backblaze-b2-upload-any"; // Import e
 import fs from "fs/promises";
 import path from "path";
 import dotenv from "dotenv";
+import logger from "../utils/logger.js";
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -18,7 +19,7 @@ const BUCKET_NAME = process.env.B2_BUCKET_NAME;
 // but b2.authorize() provides the most accurate downloadUrl (account's base download URL)
 
 if (!APPLICATION_KEY_ID || !APPLICATION_KEY || !BUCKET_ID || !BUCKET_NAME) {
-  console.error(
+  logger.error(
     "Missing Backblaze B2 environment variables. Please check your .env file."
   );
   // Optionally, throw an error or exit if configuration is critical
@@ -40,7 +41,7 @@ async function authorizeB2() {
     const authData = await b2.authorize();
     return authData.data;
   } catch (error) {
-    console.error("Error authorizing with Backblaze B2:", error);
+    logger.error("Error authorizing with Backblaze B2:", error);
     throw error;
   }
 }
@@ -98,7 +99,7 @@ async function uploadToB2AndGetPresignedUrl(
 
     // --- Upload Video (if provided) ---
     if (hasVideoToUpload) {
-      console.log(
+      logger.info(
         `Uploading video stream ${videoFileNameInB2} using uploadAny...`
       );
       const uploadedVideoResponse = await b2.uploadAny({
@@ -113,7 +114,7 @@ async function uploadToB2AndGetPresignedUrl(
         uploadedVideoResponse.fileName || uploadedVideoResponse.data?.fileName;
 
       if (!videoB2FileId || !videoB2FileName) {
-        console.error(
+        logger.error(
           "uploadAny video response missing fileId or fileName:",
           uploadedVideoResponse
         );
@@ -121,7 +122,7 @@ async function uploadToB2AndGetPresignedUrl(
           "Failed to get fileId or fileName from B2 uploadAny video response."
         );
       }
-      console.log(
+      logger.info(
         `Video ${videoB2FileName} (ID: ${videoB2FileId}) uploaded to B2 via uploadAny.`
       );
 
@@ -150,7 +151,7 @@ async function uploadToB2AndGetPresignedUrl(
       const imagePresignedUrlDurationSecs =
         parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
         presignedUrlDurationSecs;
-      console.log(
+      logger.info(
         `Uploading thumbnail stream ${thumbnailFileNameInB2} using uploadAny...`
       );
       const uploadedThumbResponse = await b2.uploadAny({
@@ -165,7 +166,7 @@ async function uploadToB2AndGetPresignedUrl(
         uploadedThumbResponse.fileName || uploadedThumbResponse.data?.fileName;
 
       if (!thumbnailB2FileId || !thumbnailB2FileName) {
-        console.error(
+        logger.error(
           "uploadAny thumbnail response missing fileId or fileName:",
           uploadedThumbResponse
         );
@@ -173,7 +174,7 @@ async function uploadToB2AndGetPresignedUrl(
           "Failed to get fileId or fileName from B2 uploadAny thumbnail response."
         );
       }
-      console.log(
+      logger.info(
         `Thumbnail ${thumbnailB2FileName} (ID: ${thumbnailB2FileId}) uploaded to B2 via uploadAny.`
       );
 
@@ -211,14 +212,14 @@ async function uploadToB2AndGetPresignedUrl(
       message: message,
     };
   } catch (error) {
-    console.error(
+    logger.error(
       `Error in B2 service (video: ${videoFileNameInB2 || "N/A"}, thumb: ${
         thumbnailFileNameInB2 || "N/A"
       }):`,
       error.message
     );
     if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details:", error.response.data);
+      logger.error("B2 API Error Details:", error.response.data);
     }
     let errorToThrow = new Error(`B2 service error: ${error.message}`);
     // Preserve any file IDs that might have been uploaded before an error occurred for potential cleanup
@@ -250,70 +251,53 @@ async function generatePresignedUrlForExistingFile(
       validDurationInSeconds: presignedUrlDuration,
     });
 
-    const newViewableUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${newDownloadAuthToken}`;
-
-    console.log(
-      `Generated new pre-signed URL for ${b2FileName} (valid for ${presignedUrlDuration}s): ${newViewableUrl}`
-    );
-    return newViewableUrl;
+    const newPresignedUrl = `${accountDownloadUrl}/file/${BUCKET_NAME}/${b2FileName}?Authorization=${newDownloadAuthToken}`;
+    logger.info(`Generated new pre-signed URL for ${b2FileName}`);
+    return newPresignedUrl;
   } catch (error) {
-    console.error(
-      `Error generating new pre-signed URL for ${b2FileName}:`,
-      error.message
+    logger.error(
+      `Error generating pre-signed URL for existing file ${b2FileName}:`,
+      error
     );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details:", error.response.data);
-    }
-    throw new Error(
-      `Failed to generate new pre-signed URL for ${b2FileName}: ${error.message}`
-    );
+    throw error;
   }
 }
 
 /**
- * Deletes a file from Backblaze B2.
+ * Deletes a file from Backblaze B2 using its file name and file ID.
  * @param {string} fileName - The name of the file in B2.
  * @param {string} fileId - The ID of the file in B2.
- * @returns {Promise<object>} - Confirmation from B2.
+ * @returns {Promise<object>} - The response data from B2 on successful deletion.
  */
 async function deleteFileFromB2(fileName, fileId) {
   try {
-    await authorizeB2(); // Ensure we are authorized
-
-    console.log(
-      `Attempting to delete file ${fileName} (ID: ${fileId}) from B2.`
+    logger.info(
+      `Attempting to delete file from B2: ${fileName} (ID: ${fileId})`
     );
-
     const response = await b2.deleteFileVersion({
       fileName: fileName,
       fileId: fileId,
     });
-
-    console.log(
-      `File ${fileName} (ID: ${fileId}) deleted successfully from B2.`
+    logger.info(
+      `Successfully deleted file from B2: ${fileName} (ID: ${fileId})`
     );
     return response.data;
   } catch (error) {
-    console.error(
-      `Error deleting file ${fileName} (ID: ${fileId}) from B2:`,
-      error.message
-    );
-    if (error.isAxiosError && error.response && error.response.data) {
-      console.error("B2 API Error Details for delete:", error.response.data);
-    }
-    // Decide if you want to throw an error that stops the VOD deletion process
-    // or just log it and proceed with DB deletion.
-    // For now, let's throw to indicate B2 deletion failure.
-    throw new Error(
-      `Failed to delete file ${fileName} from B2: ${error.message}`
-    );
+    // Log detailed error information
+    logger.error(`Failed to delete file from B2: ${fileName} (ID: ${fileId})`, {
+      errorMessage: error.message,
+      errorCode: error.code,
+      responseStatus: error.response?.status,
+      responseData: error.response?.data,
+    });
+    // Re-throw the error to be handled by the calling function
+    throw new Error(`Could not delete file ${fileName} from B2.`);
   }
 }
 
-// Export the main function to be used by other services
 export {
-  uploadToB2AndGetPresignedUrl,
   authorizeB2,
+  uploadToB2AndGetPresignedUrl,
   generatePresignedUrlForExistingFile,
   deleteFileFromB2,
 };

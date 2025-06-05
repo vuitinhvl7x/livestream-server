@@ -1,12 +1,6 @@
 import { markLive, markEnded } from "../services/streamService.js";
 import { vodService } from "../services/vodService.js"; // Thêm VOD service
-// import logger from "../utils/logger.js"; // Giả sử bạn có một utility logger
-
-// Thay thế logger tạm thời bằng console.log nếu chưa có utility logger
-const logger = {
-  info: console.log,
-  error: console.error,
-};
+import logger from "../utils/logger.js"; // Giả sử bạn có một utility logger
 
 export async function handleStreamEvent(req, res) {
   // Dữ liệu từ nginx-rtmp-module thường là x-www-form-urlencoded
