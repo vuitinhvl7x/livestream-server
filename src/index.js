@@ -18,6 +18,16 @@ import categoryRoutes from "./routes/categoryRoutes.js";
 import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
 import followRoutes from "./routes/followRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+// Import BullMQ Worker
+import notificationWorker from "./workers/notificationWorker.js"; // Worker sẽ tự khởi động khi được import
+// Import logger
+import logger from "./utils/logger.js";
+// Import Bull Board
+import { createBullBoard } from "@bull-board/api";
+import { BullMQAdapter } from "@bull-board/api/bullMQAdapter.js";
+import { ExpressAdapter } from "@bull-board/express";
+// Import your queue
+import notificationQueue from "./queues/notificationQueue.js";
 
 dotenv.config();
 
@@ -35,6 +45,17 @@ const io = new Server(server, {
 });
 
 setNotificationServiceIo(io);
+
+// Bull Board setup
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath("/admin/queues");
+
+createBullBoard({
+  queues: [new BullMQAdapter(notificationQueue)],
+  serverAdapter: serverAdapter,
+});
+
+app.use("/admin/queues", serverAdapter.getRouter());
 
 // Middleware
 app.use(
@@ -73,16 +94,28 @@ initializeSocketHandlers(io);
 const startServer = async () => {
   try {
     await sequelize.sync();
-    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
+    logger.info("Database (PostgreSQL/Sequelize) connected successfully.");
 
     await connectMongoDB(); // Kết nối MongoDB
+    // logger.info("MongoDB connected successfully."); // Thêm log cho MongoDB nếu connectMongoDB không có log riêng
 
     server.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Socket.IO initialized and listening on port ${PORT}`);
+      logger.info(`Server is running on port ${PORT}`);
+      logger.info(`Socket.IO initialized and listening on port ${PORT}`);
+      // Log xác nhận worker đã được load và (ngầm) khởi động
+      if (notificationWorker) {
+        logger.info("Notification Worker has been loaded and is running.");
+      }
+      // Log cho Bull Board
+      logger.info(
+        `Bull Board is available at http://localhost:${PORT}/admin/queues`
+      );
     });
   } catch (error) {
-    console.error("Unable to connect to the database(s):", error);
+    logger.error(
+      "Unable to connect to the database(s) or start server:",
+      error
+    );
     process.exit(1); // Thoát nếu không kết nối được DB chính
   }
 };

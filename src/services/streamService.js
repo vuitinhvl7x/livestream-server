@@ -15,6 +15,8 @@ import redisClient from "../lib/redis.js"; // Import Redis client
 import appEmitter from "../utils/appEvents.js"; // Import App Emitter
 import notificationService from "./notificationService.js"; // THÊM IMPORT
 import logger from "../utils/logger.js"; // Đảm bảo logger được import
+import notificationQueue from "../queues/notificationQueue.js"; // Thêm import cho BullMQ Queue
+import followService from "./followService.js"; // Thêm import cho followService
 
 dotenv.config();
 
@@ -627,32 +629,66 @@ export const markLive = async (streamKey) => {
 
       // Chỉ gửi thông báo nếu stream chuyển từ trạng thái không phải 'live' sang 'live'
       if (oldStatus !== "live") {
-        // Gửi thông báo cho followers
-        if (stream.user) {
-          // stream.user đã được include
+        if (stream.user && stream.user.id) {
           logger.info(
             `Stream ${streamKey} is now live, preparing to notify followers of user ${stream.user.username} (ID: ${stream.user.id})`
           );
-          notificationService
-            .notifyFollowers(
-              stream.user, // actorUser (User object)
-              "stream_started", // actionType
-              stream, // entity (Stream object, có id và title)
-              (followerUsername, actorUsername, entityTitle) =>
-                `${actorUsername} has started streaming: ${
-                  entityTitle || "Live Stream"
-                }!`
-            )
-            .catch((err) => {
-              // Bắt lỗi ở đây để việc gửi thông báo không làm crash luồng chính
-              logger.error(
-                `Failed to notify followers for stream ${streamKey} (user: ${stream.user.id}):`,
-                err
+
+          try {
+            const allFollows = await followService.getFollowersInternal(
+              stream.user.id
+            );
+            const followers = allFollows
+              .map((follow) => follow.follower) // Lấy object follower từ mỗi mục follow
+              .filter(
+                (follower) => follower && follower.id && follower.username
+              ); // Lọc những follower hợp lệ
+
+            if (followers.length > 0) {
+              const batchSize = 10;
+              for (let i = 0; i < followers.length; i += batchSize) {
+                const batch = followers.slice(i, i + batchSize);
+                const jobData = {
+                  actionType: "stream_started",
+                  actorUser: {
+                    id: stream.user.id,
+                    username: stream.user.username,
+                  },
+                  entity: { id: stream.id, title: stream.title },
+                  followers: batch.map((f) => ({
+                    id: f.id,
+                    username: f.username,
+                  })), // Chỉ gửi id và username
+                  messageTemplate: `${
+                    stream.user.username
+                  } has started streaming: ${stream.title || "Live Stream"}!`,
+                };
+                await notificationQueue.add(
+                  "process-notification-batch",
+                  jobData
+                );
+                logger.info(
+                  `Added notification job to queue for stream ${
+                    stream.id
+                  }, batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(
+                    followers.length / batchSize
+                  )}`
+                );
+              }
+            } else {
+              logger.info(
+                `User ${stream.user.id} has no followers to notify for stream ${stream.id}.`
               );
-            });
+            }
+          } catch (notifyError) {
+            logger.error(
+              `Failed to get followers or add notification job for stream ${streamKey} (user: ${stream.user.id}):`,
+              notifyError
+            );
+          }
         } else {
           logger.warn(
-            `Cannot send stream_started notification for stream ${streamKey} because user info is missing.`
+            `Cannot send stream_started notification for stream ${streamKey} because user info is missing or invalid.`
           );
         }
       }

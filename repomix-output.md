@@ -47,6 +47,8 @@ src/config/database.js
 src/config/mongodb.js
 src/controllers/categoryController.js
 src/controllers/chatController.js
+src/controllers/followController.js
+src/controllers/notificationController.js
 src/controllers/streamController.js
 src/controllers/userController.js
 src/controllers/vodController.js
@@ -58,26 +60,33 @@ src/middlewares/adminCheckMiddleware.js
 src/middlewares/authMiddleware.js
 src/middlewares/uploadMiddleware.js
 src/models/category.js
+src/models/follow.js
 src/models/index.js
 src/models/mongo/ChatMessage.js
+src/models/notification.js
 src/models/stream.js
 src/models/user.js
 src/models/vod.js
 src/routes/admin/categoryAdminRoutes.js
 src/routes/categoryRoutes.js
 src/routes/chatRoutes.js
+src/routes/followRoutes.js
+src/routes/notificationRoutes.js
 src/routes/streamRoutes.js
 src/routes/userRoutes.js
 src/routes/vodRoutes.js
 src/routes/webhookRoutes.js
 src/services/categoryService.js
 src/services/chatService.js
+src/services/followService.js
+src/services/notificationService.js
 src/services/streamService.js
 src/services/userService.js
 src/services/vodService.js
 src/socketHandlers.js
 src/utils/appEvents.js
 src/utils/errorHandler.js
+src/utils/logger.js
 src/utils/videoUtils.js
 src/validators/categoryValidators.js
 src/validators/streamValidators.js
@@ -311,6 +320,181 @@ export const getChatHistory = async (req, res) => {
 };
 ```
 
+## File: src/controllers/followController.js
+```javascript
+import followService from "../services/followService.js";
+import { AppError } from "../utils/errorHandler.js";
+import logger from "../utils/logger.js";
+
+const followController = {
+  followUser: async (req, res, next) => {
+    try {
+      const followerId = req.user.id; // Từ authMiddleware
+      const followingIdString = req.params.userId;
+
+      if (!followingIdString || isNaN(parseInt(followingIdString, 10))) {
+        return next(
+          new AppError("Invalid User ID for following provided", 400)
+        );
+      }
+      const followingId = parseInt(followingIdString, 10);
+
+      if (followerId === followingId) {
+        return next(new AppError("User cannot follow themselves", 400));
+      }
+
+      const result = await followService.followUser(followerId, followingId);
+      res.status(200).json(result);
+    } catch (error) {
+      // lỗi đã được log ở service, controller chỉ cần chuyển tiếp
+      next(error);
+    }
+  },
+
+  unfollowUser: async (req, res, next) => {
+    try {
+      const followerId = req.user.id; // Từ authMiddleware
+      const followingIdString = req.params.userId;
+
+      if (!followingIdString || isNaN(parseInt(followingIdString, 10))) {
+        return next(
+          new AppError("Invalid User ID for unfollowing provided", 400)
+        );
+      }
+      const followingId = parseInt(followingIdString, 10);
+
+      if (followerId === followingId) {
+        return next(new AppError("User cannot unfollow themselves", 400));
+      }
+
+      const result = await followService.unfollowUser(followerId, followingId);
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getFollowers: async (req, res, next) => {
+    try {
+      const userIdString = req.params.userId;
+      const { page = 1, limit = 10 } = req.query;
+
+      if (!userIdString || isNaN(parseInt(userIdString, 10))) {
+        return next(new AppError("Invalid User ID provided", 400));
+      }
+      const userId = parseInt(userIdString, 10);
+
+      const result = await followService.getFollowers(
+        userId,
+        parseInt(page, 10),
+        parseInt(limit, 10)
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getFollowing: async (req, res, next) => {
+    try {
+      const userIdString = req.params.userId;
+      const { page = 1, limit = 10 } = req.query;
+
+      if (!userIdString || isNaN(parseInt(userIdString, 10))) {
+        return next(new AppError("Invalid User ID provided", 400));
+      }
+      const userId = parseInt(userIdString, 10);
+
+      const result = await followService.getFollowing(
+        userId,
+        parseInt(page, 10),
+        parseInt(limit, 10)
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+};
+
+export default followController;
+```
+
+## File: src/controllers/notificationController.js
+```javascript
+import notificationService from "../services/notificationService.js";
+import { AppError } from "../utils/errorHandler.js";
+import logger from "../utils/logger.js";
+
+const notificationController = {
+  getNotifications: async (req, res, next) => {
+    try {
+      const userId = req.user.id; // Từ authMiddleware
+      let { page = 1, limit = 10, isRead } = req.query;
+
+      page = parseInt(page, 10);
+      limit = parseInt(limit, 10);
+
+      // Chuyển đổi isRead từ string sang boolean nếu tồn tại
+      if (isRead !== undefined) {
+        if (isRead === "true") {
+          isRead = true;
+        } else if (isRead === "false") {
+          isRead = false;
+        } else {
+          // Nếu isRead không phải là 'true' hoặc 'false' thì không lọc theo isRead
+          isRead = undefined;
+        }
+      }
+
+      const result = await notificationService.getNotifications(
+        userId,
+        page,
+        limit,
+        isRead
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  markNotificationAsRead: async (req, res, next) => {
+    try {
+      const userId = req.user.id; // Từ authMiddleware
+      const notificationIdString = req.params.notificationId;
+
+      if (!notificationIdString || isNaN(parseInt(notificationIdString, 10))) {
+        return next(new AppError("Invalid Notification ID provided", 400));
+      }
+      const notificationId = parseInt(notificationIdString, 10);
+
+      const result = await notificationService.markNotificationAsRead(
+        notificationId,
+        userId
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  markAllNotificationsAsRead: async (req, res, next) => {
+    try {
+      const userId = req.user.id; // Từ authMiddleware
+      const result = await notificationService.markAllNotificationsAsRead(
+        userId
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+};
+
+export default notificationController;
+```
+
 ## File: src/lib/redis.js
 ```javascript
 import Redis from "ioredis";
@@ -376,6 +560,47 @@ export const adminCheckMiddleware = (req, res, next) => {
 // export default adminCheckMiddleware;
 ```
 
+## File: src/models/follow.js
+```javascript
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
+
+const Follow = sequelize.define(
+  "Follow",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    followerId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users", // Tên bảng Users
+        key: "id",
+      },
+      onDelete: "CASCADE",
+    },
+    followingId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users", // Tên bảng Users
+        key: "id",
+      },
+      onDelete: "CASCADE",
+    },
+  },
+  {
+    timestamps: true,
+    // tableName: 'Follows' // Sequelize sẽ tự động đặt tên bảng là 'Follows'
+  }
+);
+
+export default Follow;
+```
+
 ## File: src/models/mongo/ChatMessage.js
 ```javascript
 import mongoose from "mongoose";
@@ -410,6 +635,59 @@ const ChatMessage =
   mongoose.model("ChatMessage", chatMessageSchema);
 
 export default ChatMessage;
+```
+
+## File: src/models/notification.js
+```javascript
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
+
+const Notification = sequelize.define(
+  "Notification",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users", // Tên bảng Users
+        key: "id",
+      },
+      onDelete: "CASCADE",
+    },
+    type: {
+      type: DataTypes.ENUM("new_follower", "stream_started", "new_vod"),
+      allowNull: false,
+    },
+    message: {
+      type: DataTypes.STRING, // Hoặc DataTypes.JSON nếu bạn muốn lưu chi tiết phức tạp
+      allowNull: false,
+    },
+    isRead: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    relatedEntityId: {
+      type: DataTypes.INTEGER,
+      allowNull: true, // Có thể null nếu không có thực thể liên quan trực tiếp
+    },
+    relatedEntityType: {
+      type: DataTypes.STRING, // 'user', 'stream', 'vod'
+      allowNull: true,
+    },
+  },
+  {
+    timestamps: true,
+    // tableName: 'Notifications' // Sequelize sẽ tự động đặt tên bảng là 'Notifications'
+  }
+);
+
+export default Notification;
 ```
 
 ## File: src/routes/admin/categoryAdminRoutes.js
@@ -468,6 +746,61 @@ const router = express.Router();
 // GET /api/chat/:streamId/messages - Lấy lịch sử chat cho một stream
 // Client sẽ cần truyền streamId trong params và có thể page/limit trong query string
 router.get("/:streamId/messages", authenticateToken, getChatHistory);
+
+export default router;
+```
+
+## File: src/routes/followRoutes.js
+```javascript
+import express from "express";
+import followController from "../controllers/followController.js";
+import authMiddleware from "../middlewares/authMiddleware.js";
+
+const router = express.Router();
+
+// POST /api/users/:userId/follow - Theo dõi người dùng
+router.post("/:userId/follow", authMiddleware, followController.followUser);
+
+// DELETE /api/users/:userId/unfollow - Bỏ theo dõi người dùng
+router.delete(
+  "/:userId/unfollow",
+  authMiddleware,
+  followController.unfollowUser
+);
+
+// GET /api/users/:userId/followers - Lấy danh sách người theo dõi
+router.get("/:userId/followers", followController.getFollowers);
+
+// GET /api/users/:userId/following - Lấy danh sách người đang theo dõi
+router.get("/:userId/following", followController.getFollowing);
+
+export default router;
+```
+
+## File: src/routes/notificationRoutes.js
+```javascript
+import express from "express";
+import notificationController from "../controllers/notificationController.js";
+import authMiddleware from "../middlewares/authMiddleware.js";
+
+const router = express.Router();
+
+// GET /api/notifications - Lấy danh sách thông báo của người dùng hiện tại
+router.get("/", authMiddleware, notificationController.getNotifications);
+
+// POST /api/notifications/:notificationId/read - Đánh dấu một thông báo là đã đọc
+router.post(
+  "/:notificationId/read",
+  authMiddleware,
+  notificationController.markNotificationAsRead
+);
+
+// (Tùy chọn) POST /api/notifications/read-all - Đánh dấu tất cả thông báo là đã đọc
+router.post(
+  "/read-all",
+  authMiddleware,
+  notificationController.markAllNotificationsAsRead
+);
 
 export default router;
 ```
@@ -551,6 +884,523 @@ export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
 };
 ```
 
+## File: src/services/followService.js
+```javascript
+import { User, Follow, sequelize, Notification } from "../models/index.js";
+// import { redisClient } from '../lib/redis.js'; // TODO: Sẽ uncomment khi triển khai Redis
+import { AppError } from "../utils/errorHandler.js";
+import notificationService from "./notificationService.js";
+import logger from "../utils/logger.js";
+
+const followService = {
+  followUser: async (followerId, followingId) => {
+    if (followerId === followingId) {
+      throw new AppError("User cannot follow themselves", 400);
+    }
+    try {
+      const t = await sequelize.transaction();
+      const follower = await User.findByPk(followerId, { transaction: t });
+      const following = await User.findByPk(followingId, { transaction: t });
+
+      if (!follower || !following) {
+        await t.rollback();
+        throw new AppError("Follower or following user not found", 404);
+      }
+
+      const existingFollow = await Follow.findOne({
+        where: { followerId, followingId },
+        transaction: t,
+      });
+
+      if (existingFollow) {
+        await t.rollback();
+        throw new AppError("Already following this user", 409); // 409 Conflict
+      }
+
+      await Follow.create({ followerId, followingId }, { transaction: t });
+
+      // Tạo thông báo
+      // Đảm bảo notificationService.createNotification không ném lỗi làm rollback transaction này nếu không cần thiết
+      // Hoặc bỏ nó ra ngoài transaction nếu việc follow vẫn nên thành công dù notification lỗi.
+      // Hiện tại, nếu createNotification lỗi, transaction sẽ rollback.
+      const notificationMessage = `${follower.username} started following you.`;
+      await notificationService.createNotification(
+        followingId, // userId - người nhận thông báo
+        "new_follower",
+        notificationMessage,
+        followerId, // relatedEntityId - ID của người theo dõi
+        "user", // relatedEntityType
+        follower.username // creatorUsername
+      );
+
+      await t.commit();
+      logger.info(
+        `User ${followerId} (${follower.username}) successfully followed user ${followingId} (${following.username})`
+      );
+      // TODO: Cập nhật Redis (user:followers:count:${followingId}, user:following:count:${followerId})
+      return {
+        success: true,
+        message: `Successfully followed ${following.username}`,
+      };
+    } catch (error) {
+      logger.error(
+        `Error in followUser (follower: ${followerId}, following: ${followingId}):`,
+        error
+      );
+      // Không cần await t.rollback() ở đây nếu lỗi từ DB operation trong transaction thì nó tự rollback.
+      // Nếu lỗi từ AppError đã throw thì transaction có thể chưa commit.
+      if (error instanceof AppError) throw error;
+      throw new AppError("Could not follow user", 500, error);
+    }
+  },
+
+  unfollowUser: async (followerId, followingId) => {
+    if (followerId === followingId) {
+      throw new AppError("User cannot unfollow themselves", 400);
+    }
+    try {
+      const follower = await User.findByPk(followerId);
+      const following = await User.findByPk(followingId);
+
+      if (!follower || !following) {
+        throw new AppError(
+          "Follower or following user not found for unfollow operation",
+          404
+        );
+      }
+
+      const result = await Follow.destroy({
+        where: { followerId, followingId },
+      });
+
+      if (result === 0) {
+        throw new AppError("You are not following this user", 404);
+      }
+      logger.info(
+        `User ${followerId} (${follower.username}) successfully unfollowed user ${followingId} (${following.username})`
+      );
+      // TODO: Cập nhật Redis
+      return {
+        success: true,
+        message: `Successfully unfollowed ${following.username}`,
+      };
+    } catch (error) {
+      logger.error(
+        `Error in unfollowUser (follower: ${followerId}, following: ${followingId}):`,
+        error
+      );
+      if (error instanceof AppError) throw error;
+      throw new AppError("Could not unfollow user", 500, error);
+    }
+  },
+
+  getFollowers: async (userId, page = 1, limit = 10) => {
+    try {
+      const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const { count, rows } = await Follow.findAndCountAll({
+        where: { followingId: userId }, // Người được user này theo dõi -> followers của userId
+        include: [
+          {
+            model: User,
+            as: "follower", // Defined in models/index.js
+            attributes: ["id", "username", "avatarUrl"], // Lấy các thuộc tính cần thiết của người theo dõi
+          },
+        ],
+        limit: parseInt(limit, 10),
+        offset,
+        order: [["createdAt", "DESC"]],
+      });
+
+      return {
+        followers: rows.map((f) => f.follower), // Trả về danh sách user objects
+        totalItems: count,
+        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        currentPage: parseInt(page, 10),
+      };
+    } catch (error) {
+      logger.error(`Error in getFollowers for user ${userId}:`, error);
+      throw new AppError("Could not retrieve followers", 500, error);
+    }
+  },
+
+  // Hàm nội bộ để notificationService sử dụng, không phân trang, chỉ lấy id và username
+  getFollowersInternal: async (userId) => {
+    try {
+      const follows = await Follow.findAll({
+        where: { followingId: userId },
+        include: [
+          {
+            model: User,
+            as: "follower",
+            attributes: ["id", "username"],
+          },
+        ],
+        raw: false, // Để lấy nested objects từ include
+      });
+      // Trả về mảng các đối tượng Follow, mỗi đối tượng chứa thông tin user của follower
+      // notificationService sẽ cần truy cập follow.follower.id và follow.follower.username
+      return follows;
+    } catch (error) {
+      logger.error(`Error in getFollowersInternal for user ${userId}:`, error);
+      // Không nên throw ở đây để không làm gián đoạn notifyFollowers, chỉ log và trả về mảng rỗng
+      return [];
+    }
+  },
+
+  getFollowing: async (userId, page = 1, limit = 10) => {
+    try {
+      const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const { count, rows } = await Follow.findAndCountAll({
+        where: { followerId: userId }, // Người mà user này đang theo dõi
+        include: [
+          {
+            model: User,
+            as: "following", // Defined in models/index.js
+            attributes: ["id", "username", "avatarUrl"], // Lấy các thuộc tính cần thiết của người được theo dõi
+          },
+        ],
+        limit: parseInt(limit, 10),
+        offset,
+        order: [["createdAt", "DESC"]],
+      });
+
+      return {
+        following: rows.map((f) => f.following), // Trả về danh sách user objects
+        totalItems: count,
+        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        currentPage: parseInt(page, 10),
+      };
+    } catch (error) {
+      logger.error(`Error in getFollowing for user ${userId}:`, error);
+      throw new AppError("Could not retrieve following list", 500, error);
+    }
+  },
+
+  getFollowerCount: async (userId) => {
+    // TODO: Lấy từ Redis trước, nếu không có thì query DB và cache lại
+    try {
+      const count = await Follow.count({ where: { followingId: userId } });
+      return count;
+    } catch (error) {
+      logger.error(`Error in getFollowerCount for user ${userId}:`, error);
+      throw new AppError("Could not retrieve follower count", 500, error);
+    }
+  },
+
+  getFollowingCount: async (userId) => {
+    // TODO: Lấy từ Redis trước, nếu không có thì query DB và cache lại
+    try {
+      const count = await Follow.count({ where: { followerId: userId } });
+      return count;
+    } catch (error) {
+      logger.error(`Error in getFollowingCount for user ${userId}:`, error);
+      throw new AppError("Could not retrieve following count", 500, error);
+    }
+  },
+};
+
+export default followService;
+```
+
+## File: src/services/notificationService.js
+```javascript
+import { User, Notification, sequelize } from "../models/index.js";
+// import { redisClient } from '../lib/redis.js'; // TODO: Sẽ uncomment khi triển khai Redis
+// import { io } from '../index.js'; // Cần io instance từ src/index.js, hoặc truyền vào, hoặc dùng event emitter
+import { AppError } from "../utils/errorHandler.js";
+import logger from "../utils/logger.js"; // Thêm logger
+
+// Placeholder cho io instance, sẽ cần giải pháp tốt hơn để tránh circular dependency
+// hoặc truyền io vào các hàm cần thiết.
+let ioInstance = null;
+export const setIoInstance = (io) => {
+  ioInstance = io;
+  logger.info("Socket.IO instance set in notificationService");
+};
+
+const notificationService = {
+  createNotification: async (
+    userId,
+    type,
+    message,
+    relatedEntityId = null,
+    relatedEntityType = null,
+    creatorUsername = null // Thêm username của người tạo sự kiện (ví dụ: người follow)
+  ) => {
+    try {
+      const userExists = await User.findByPk(userId);
+      if (!userExists) {
+        // Không throw lỗi ở đây vì có thể là thông báo cho user không tồn tại (ít gặp)
+        // hoặc là service khác sẽ handle. Tuy nhiên, ghi log là quan trọng.
+        logger.warn(
+          `Attempted to create notification for non-existent user ID: ${userId}`
+        );
+        // return null; // Hoặc throw AppError tùy theo yêu cầu nghiệp vụ
+      }
+
+      const notificationData = {
+        userId,
+        type,
+        message,
+        relatedEntityId,
+        relatedEntityType,
+      };
+
+      const notification = await Notification.create(notificationData);
+      logger.info(
+        `Notification created for user ${userId}, type ${type}, ID: ${notification.id}`
+      );
+
+      if (ioInstance) {
+        const notificationRoom = `notification:${userId}`;
+        // Gửi thêm thông tin chi tiết hơn cho client nếu cần
+        const payload = {
+          ...notification.toJSON(),
+          // Ví dụ: thêm thông tin người tạo nếu là 'new_follower'
+          ...(type === "new_follower" &&
+            creatorUsername &&
+            relatedEntityId && {
+              actor: { id: relatedEntityId, username: creatorUsername },
+            }),
+        };
+        ioInstance.to(notificationRoom).emit("new_notification", payload);
+        logger.info(`Emitted 'new_notification' to room ${notificationRoom}`);
+      } else {
+        logger.warn(
+          "ioInstance not set in notificationService, cannot emit real-time notification."
+        );
+      }
+
+      // TODO: Cập nhật Redis (user:notifications:unread:${userId})
+      // await redisClient.incr(`user:notifications:unread:${userId}`);
+
+      return notification;
+    } catch (error) {
+      logger.error(`Error in createNotification for user ${userId}:`, error);
+      // Không ném lỗi ở đây để không làm gián đoạn luồng gọi (ví dụ khi follow thành công nhưng notification lỗi)
+      // Service gọi hàm này nên tự xử lý.
+      return null; // Hoặc throw new AppError('Could not create notification', 500, error); tùy theo yêu cầu
+    }
+  },
+
+  getNotifications: async (userId, page = 1, limit = 10, isRead) => {
+    try {
+      const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const whereClause = { userId };
+      if (isRead !== undefined && (isRead === true || isRead === "true")) {
+        whereClause.isRead = true;
+      } else if (
+        isRead !== undefined &&
+        (isRead === false || isRead === "false")
+      ) {
+        whereClause.isRead = false;
+      }
+
+      const { count, rows } = await Notification.findAndCountAll({
+        where: whereClause,
+        limit: parseInt(limit, 10),
+        offset,
+        order: [["createdAt", "DESC"]],
+        // TODO: Cân nhắc include User (relatedEntity) nếu type là 'new_follower' để hiển thị username người follow
+        // include: [
+        //   {
+        //     model: User,
+        //     as: 'relatedUser', // Cần định nghĩa association này nếu muốn dùng
+        //     required: false,
+        //     where: { '$Notification.relatedEntityType$': 'user' }
+        //   }
+        // ]
+      });
+
+      return {
+        notifications: rows,
+        totalItems: count,
+        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        currentPage: parseInt(page, 10),
+      };
+    } catch (error) {
+      logger.error(`Error in getNotifications for user ${userId}:`, error);
+      throw new AppError("Could not retrieve notifications", 500, error);
+    }
+  },
+
+  markNotificationAsRead: async (notificationId, userId) => {
+    try {
+      const notification = await Notification.findOne({
+        where: { id: notificationId, userId },
+      });
+
+      if (!notification) {
+        throw new AppError("Notification not found or not owned by user", 404);
+      }
+
+      if (notification.isRead) {
+        return {
+          success: true,
+          message: "Notification already marked as read",
+          notification,
+        };
+      }
+
+      notification.isRead = true;
+      await notification.save();
+
+      // TODO: Cập nhật Redis
+      // const unreadCount = await Notification.count({ where: { userId, isRead: false } });
+      // await redisClient.set(`user:notifications:unread:${userId}`, unreadCount);
+
+      logger.info(
+        `Notification ${notificationId} marked as read for user ${userId}`
+      );
+      return {
+        success: true,
+        message: "Notification marked as read",
+        notification,
+      };
+    } catch (error) {
+      logger.error(
+        `Error in markNotificationAsRead for notification ${notificationId}:`,
+        error
+      );
+      if (error instanceof AppError) throw error;
+      throw new AppError("Could not mark notification as read", 500, error);
+    }
+  },
+
+  markAllNotificationsAsRead: async (userId) => {
+    try {
+      const [affectedCount] = await Notification.update(
+        { isRead: true },
+        { where: { userId, isRead: false }, returning: false } // returning: false vì không cần lấy lại bản ghi
+      );
+
+      // TODO: Cập nhật Redis
+      // await redisClient.set(`user:notifications:unread:${userId}`, 0);
+
+      logger.info(
+        `All unread notifications marked as read for user ${userId}. Count: ${affectedCount}`
+      );
+      return {
+        success: true,
+        message: "All notifications marked as read",
+        affectedCount,
+      };
+    } catch (error) {
+      logger.error(
+        `Error in markAllNotificationsAsRead for user ${userId}:`,
+        error
+      );
+      throw new AppError(
+        "Could not mark all notifications as read",
+        500,
+        error
+      );
+    }
+  },
+
+  getUnreadNotificationCount: async (userId) => {
+    // TODO: Lấy từ Redis trước, nếu không có thì query DB và cache lại
+    try {
+      // const cachedCount = await redisClient.get(`user:notifications:unread:${userId}`);
+      // if (cachedCount !== null) return parseInt(cachedCount, 10);
+
+      const count = await Notification.count({
+        where: { userId, isRead: false },
+      });
+      // await redisClient.set(`user:notifications:unread:${userId}`, count);
+      return count;
+    } catch (error) {
+      logger.error(
+        `Error in getUnreadNotificationCount for user ${userId}:`,
+        error
+      );
+      // Trả về 0 nếu có lỗi để không làm crash flow, nhưng cần log
+      return 0;
+    }
+  },
+
+  // Hàm này sẽ được gọi từ streamService hoặc vodService
+  notifyFollowers: async (actorUser, actionType, entity, messageGenerator) => {
+    // actorUser: User object của người thực hiện hành động (e.g., người bắt đầu stream)
+    // actionType: 'stream_started', 'new_vod'
+    // entity: Stream object hoặc VOD object
+    // messageGenerator: function(followerUsername, actorUsername, entityTitle) => "message string"
+
+    try {
+      logger.info(
+        `Attempting to notify followers for actor ${actorUser.username} (ID: ${actorUser.id}), action: ${actionType}`
+      );
+      // Đây là một phần phụ thuộc vào followService.getFollowers
+      // Tạm thời chúng ta sẽ cần một cách để lấy ID của tất cả follower
+      // Giả sử followService có hàm getFollowerIds(userId)
+      const { default: followService } = await import("./followService.js"); // Dynamic import để tránh circular dependency
+
+      const followers = await followService.getFollowersInternal(
+        actorUser.id,
+        null,
+        null,
+        true
+      ); // Lấy tất cả follower, chỉ cần id, username
+
+      if (!followers || followers.length === 0) {
+        logger.info(
+          `No followers found for user ${actorUser.username} (ID: ${actorUser.id}) to notify for ${actionType}.`
+        );
+        return;
+      }
+
+      logger.info(
+        `Found ${followers.length} followers for ${actorUser.username} (ID: ${actorUser.id}). Preparing to send ${actionType} notifications.`
+      );
+
+      for (const followRelation of followers) {
+        // followRelation là bản ghi từ bảng Follows, follower là User object đã include
+        const followerUser = followRelation.follower;
+        if (!followerUser || !followerUser.id) {
+          logger.warn(
+            `Follower user data missing for follow relation ID: ${followRelation.id}`
+          );
+          continue;
+        }
+
+        const message = messageGenerator(
+          followerUser.username, // follower's username
+          actorUser.username, // actor's username
+          entity.title ||
+            (entityType === "stream"
+              ? `Stream by ${actorUser.username}`
+              : "New Content") // entity's title or default
+        );
+
+        let relatedEntityType = null;
+        if (actionType === "stream_started") relatedEntityType = "stream";
+        else if (actionType === "new_vod") relatedEntityType = "vod";
+
+        await notificationService.createNotification(
+          followerUser.id, // Người nhận thông báo
+          actionType,
+          message,
+          entity.id, // ID của Stream hoặc VOD
+          relatedEntityType, // 'stream' hoặc 'vod'
+          actorUser.username // Username của người tạo sự kiện (người bắt đầu stream/tạo VOD)
+        );
+      }
+      logger.info(
+        `Successfully queued notifications for ${actionType} from actor ${actorUser.id} to their followers.`
+      );
+    } catch (error) {
+      logger.error(
+        `Error in notifyFollowers for actor ${actorUser.id}, action ${actionType}:`,
+        error
+      );
+      // Không re-throw để không làm crash tiến trình chính (stream/VOD creation)
+    }
+  },
+};
+
+export default notificationService;
+```
+
 ## File: src/utils/appEvents.js
 ```javascript
 import EventEmitter from "events";
@@ -594,6 +1444,26 @@ const handleServiceError = (error, contextMessage) => {
 };
 
 export { AppError, handleServiceError };
+```
+
+## File: src/utils/logger.js
+```javascript
+// Basic logger
+const logger = {
+  info: (...args) => console.log("[INFO]", ...args),
+  warn: (...args) => console.warn("[WARN]", ...args),
+  error: (...args) => console.error("[ERROR]", ...args),
+  debug: (...args) => {
+    if (
+      process.env.NODE_ENV === "development" ||
+      process.env.DEBUG === "true"
+    ) {
+      console.debug("[DEBUG]", ...args);
+    }
+  },
+};
+
+export default logger;
 ```
 
 ## File: migrations/20250601233824-add-categoryId-to-vods-table.js
@@ -903,76 +1773,6 @@ export async function handleStreamRecordDone(req, res) {
 }
 ```
 
-## File: src/models/index.js
-```javascript
-import sequelize from "../config/database.js";
-import User from "./user.js";
-import Stream from "./stream.js";
-import VOD from "./vod.js";
-import Category from "./category.js";
-
-// --- Định nghĩa Associations ---
-
-// User <-> Stream (One-to-Many)
-User.hasMany(Stream, {
-  foreignKey: "userId",
-  as: "streams",
-  onDelete: "CASCADE",
-});
-Stream.belongsTo(User, {
-  foreignKey: "userId",
-  as: "user",
-});
-
-// User <-> VOD (One-to-Many)
-User.hasMany(VOD, {
-  foreignKey: "userId",
-  as: "vods",
-  onDelete: "CASCADE",
-});
-VOD.belongsTo(User, {
-  foreignKey: "userId",
-  as: "user",
-});
-
-// Stream <-> VOD (One-to-Many)
-Stream.hasMany(VOD, {
-  foreignKey: "streamId",
-  as: "vods",
-  onDelete: "CASCADE",
-});
-VOD.belongsTo(Stream, {
-  foreignKey: "streamId",
-  as: "stream",
-});
-
-// Category <-> Stream (One-to-Many)
-Category.hasMany(Stream, {
-  foreignKey: "categoryId",
-  as: "streams",
-  onDelete: "SET NULL",
-});
-Stream.belongsTo(Category, {
-  foreignKey: "categoryId",
-  as: "category",
-});
-
-// Category <-> VOD (One-to-Many)
-Category.hasMany(VOD, {
-  foreignKey: "categoryId",
-  as: "categoryVods",
-  onDelete: "SET NULL",
-});
-VOD.belongsTo(Category, {
-  foreignKey: "categoryId",
-  as: "category",
-});
-
-// --- Export Models và Sequelize Instance ---
-
-export { sequelize, User, Stream, VOD, Category };
-```
-
 ## File: src/routes/categoryRoutes.js
 ```javascript
 import express from "express";
@@ -1010,334 +1810,6 @@ router.get(
 // router.post("/suggest", authMiddleware, ...categoryController.suggestCategory);
 
 export default router;
-```
-
-## File: src/socketHandlers.js
-```javascript
-import jwt from "jsonwebtoken";
-// import mongoose from "mongoose"; // Không cần trực tiếp nữa
-import dotenv from "dotenv";
-import {
-  saveChatMessage,
-  getChatHistoryByStreamId,
-} from "./services/chatService.js";
-import {
-  getStreamKeyAndStatusById,
-  incrementLiveViewerCount,
-  decrementLiveViewerCount,
-  // getLiveViewerCount, // Không cần trực tiếp ở đây nữa nếu viewer_count_updated gửi count
-} from "./services/streamService.js"; // Import stream service functions
-import appEmitter from "./utils/appEvents.js"; // Sửa đường dẫn import
-
-dotenv.config();
-
-const JWT_SECRET = process.env.JWT_SECRET;
-// const MONGODB_URI = process.env.MONGODB_URI; // Không cần trực tiếp nữa
-
-// Kết nối MongoDB đã chuyển sang src/config/mongodb.js và gọi ở src/index.js
-
-// Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
-// const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
-
-const logger = {
-  info: console.log,
-  error: console.error,
-  warn: console.warn,
-}; // Basic logger
-
-const initializeSocketHandlers = (io) => {
-  // Middleware xác thực JWT cho Socket.IO
-  io.use((socket, next) => {
-    const token = socket.handshake.auth.token; // Client gửi token qua socket.handshake.auth
-    if (!token) {
-      return next(new Error("Authentication error: Token not provided"));
-    }
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
-      if (err) {
-        logger.error("Socket JWT verification error:", err.message);
-        return next(new Error("Authentication error: Invalid token"));
-      }
-      socket.user = decoded; // Gán thông tin user vào socket
-      // Lưu trữ map của roomId (streamId) tới streamKey
-      socket.joinedStreamData = new Map(); // Map<roomIdString, streamKeyString>
-      next();
-    });
-  });
-
-  // Lắng nghe sự kiện stream kết thúc từ appEmitter
-  appEmitter.on("stream:ended", ({ streamId, streamKey }) => {
-    const roomId = streamId; // streamId đã là string từ emitter
-    logger.info(
-      `'stream:ended' event received in socketHandlers for roomId: ${roomId}, streamKey: ${streamKey}.`
-    );
-    // Thông báo cho tất cả client trong phòng rằng stream đã kết thúc
-    io.to(roomId).emit("stream_ended_notification", {
-      roomId: roomId,
-      message: `Stream ${streamKey} has ended. Chat is now disabled for this room.`,
-    });
-
-    // Buộc tất cả các socket trong phòng này rời khỏi phòng
-    // io.socketsLeave(roomId) không được khuyến khích trực tiếp, thay vào đó dùng io.in(roomId).disconnectSockets(true) (Socket.IO v4+)
-    // Hoặc lấy danh sách sockets và cho từng cái leave
-    const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
-    if (socketsInRoom) {
-      socketsInRoom.forEach((socketId) => {
-        const socketInstance = io.sockets.sockets.get(socketId);
-        if (socketInstance) {
-          socketInstance.leave(roomId);
-          // Xóa dữ liệu phòng đã join khỏi socket đó nếu cần, tuy nhiên sự kiện disconnect của socket đó sẽ tự xử lý joinedStreamData
-          logger.info(
-            `Socket ${socketId} forcefully left room ${roomId} because stream ended.`
-          );
-        }
-      });
-    } else {
-      logger.info(
-        `No sockets found in room ${roomId} to remove after stream ended.`
-      );
-    }
-    // Hoặc một cách đơn giản hơn nếu chỉ muốn họ không nhận thêm event từ phòng này và để client tự xử lý:
-    // io.in(roomId).emit('force_leave_room', { roomId }); // Client sẽ phải lắng nghe sự kiện này và tự gọi socket.leave
-    // Tuy nhiên, io.socketsLeave(roomId); hoặc lặp và gọi leave là cách server-side chủ động hơn.
-    // Với Socket.IO v4, cách tốt nhất là:
-    // io.in(roomId).disconnectSockets(true); // true để đóng kết nối ngầm
-    // Nếu bạn dùng io.socketsLeave, nó có thể không hoạt động như mong đợi trong mọi trường hợp.
-    // Sử dụng lặp qua các socket và .leave() là một cách an toàn hơn nếu io.socketsLeave() không hoạt động.
-
-    // Xem xét sử dụng io.in(roomId).disconnectSockets(true) cho Socket.IO v4+
-    // Dòng dưới đây sẽ cố gắng ngắt kết nối các client trong phòng đó.
-    // Điều này cũng sẽ kích hoạt sự kiện 'disconnect' trên từng client, nơi bạn đã có logic dọn dẹp.
-    io.in(roomId).disconnectSockets(true);
-    logger.info(`Attempted to disconnect sockets in room ${roomId}.`);
-  });
-
-  io.on("connection", (socket) => {
-    logger.info(
-      `User connected: ${socket.id}, UserInfo: ${socket.user?.username}`
-    );
-
-    socket.on("join_stream_room", async (data) => {
-      const { streamId } = data;
-      const roomId = streamId?.toString();
-
-      if (!roomId) {
-        logger.warn(
-          `User ${socket.user.username} (${socket.id}) tried to join with null/undefined streamId`
-        );
-        socket.emit("room_join_error", { message: "Stream ID is required." });
-        return;
-      }
-
-      try {
-        const streamDetails = await getStreamKeyAndStatusById(streamId);
-
-        if (!streamDetails || !streamDetails.streamKey) {
-          logger.warn(
-            `Stream not found or streamKey missing for streamId ${roomId} when user ${socket.user.username} (${socket.id}) tried to join.`
-          );
-          socket.emit("room_join_error", { message: "Stream not found." });
-          return;
-        }
-
-        const { streamKey, status } = streamDetails;
-
-        if (status !== "live") {
-          logger.warn(
-            `User ${socket.user.username} (${socket.id}) tried to join stream ${streamKey} (ID: ${roomId}) which is not live (status: ${status}).`
-          );
-          socket.emit("room_join_error", { message: "Stream is not live." });
-          return;
-        }
-
-        socket.join(roomId); // Join phòng bằng streamId (roomId)
-        socket.joinedStreamData.set(roomId, streamKey); // Lưu lại mapping
-
-        logger.info(
-          `User ${socket.user.username} (${socket.id}) joined room (streamId): ${roomId} (maps to streamKey: ${streamKey})`
-        );
-
-        // Gửi lịch sử chat gần đây cho user vừa join
-        try {
-          const chatHistory = await getChatHistoryByStreamId(roomId, {
-            page: 1,
-            limit: 20,
-          }); // Lấy 20 tin nhắn gần nhất
-          if (
-            chatHistory &&
-            chatHistory.messages &&
-            chatHistory.messages.length > 0
-          ) {
-            socket.emit("recent_chat_history", {
-              streamId: roomId,
-              messages: chatHistory.messages,
-            });
-            logger.info(
-              `Sent recent chat history to ${socket.user.username} for room ${roomId} (${chatHistory.messages.length} messages).`
-            );
-          }
-        } catch (historyError) {
-          logger.error(
-            `Error fetching recent chat history for room ${roomId}:`,
-            historyError
-          );
-          // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công
-        }
-
-        const currentViewers = await incrementLiveViewerCount(streamKey);
-        if (currentViewers !== null) {
-          // Phát tới phòng có tên là roomId (streamId)
-          io.to(roomId).emit("viewer_count_updated", {
-            streamId: roomId, // hoặc streamKey tùy theo client muốn định danh thế nào
-            count: currentViewers,
-          });
-        }
-        socket.emit("room_joined_successfully", {
-          streamId: roomId,
-          streamKeyForDev: streamKey,
-        }); // Gửi streamId về cho client
-
-        // Optionally, fetch and send recent chat messages or notify others
-        // socket.to(streamKey).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
-      } catch (error) {
-        logger.error(
-          `Error during join_stream_room for streamId ${roomId} by user ${socket.user.username} (${socket.id}):`,
-          error
-        );
-        socket.emit("room_join_error", {
-          message: "Error joining stream. Please try again.",
-        });
-      }
-    });
-
-    socket.on("chat_message", async (data) => {
-      const { streamId, message } = data; // Client gửi streamId (có thể là số hoặc chuỗi)
-      const roomId = streamId?.toString(); // roomId chắc chắn là chuỗi, dùng cho tên phòng socket
-
-      if (!roomId || !message) {
-        logger.warn(
-          "Received chat_message with missing streamId or message:",
-          data
-        );
-        socket.emit("message_error", {
-          message: "Stream ID and message are required.",
-        });
-        return;
-      }
-
-      if (!socket.rooms.has(roomId)) {
-        logger.warn(
-          `User ${socket.user.username} (${socket.id}) sent message to room ${roomId} they are not in.`
-        );
-        socket.emit("message_error", {
-          message: `You are not in room ${roomId}.`,
-        });
-        return;
-      }
-
-      // Lấy streamKey từ map đã lưu nếu cần cho các mục đích khác (không cần cho saveChatMessage nếu nó dùng streamId)
-      // const streamKey = socket.joinedStreamData.get(roomId);
-
-      try {
-        const savedMessage = await saveChatMessage({
-          streamId: roomId, // LUÔN DÙNG roomId (là streamId.toString()) để đảm bảo là chuỗi cho MongoDB
-          userId: socket.user.id,
-          username: socket.user.username,
-          message,
-        });
-
-        // Broadcast tin nhắn đến tất cả client trong phòng streamId (roomId)
-        io.to(roomId).emit("new_message", {
-          userId: savedMessage.userId,
-          username: savedMessage.username,
-          message: savedMessage.message,
-          timestamp: savedMessage.timestamp,
-          streamId: roomId, // Trả về streamId (roomId) cho client
-        });
-      } catch (error) {
-        logger.error(
-          `Error saving or broadcasting chat message for room ${roomId}:`,
-          error
-        );
-        socket.emit("message_error", {
-          message: "Could not process your message.",
-        });
-      }
-    });
-
-    socket.on("leave_stream_room", async (data) => {
-      const { streamId } = data;
-      const roomId = streamId?.toString();
-      if (!roomId) {
-        logger.warn(
-          `User ${socket.user.username} (${socket.id}) tried to leave with null/undefined streamId`
-        );
-        return;
-      }
-
-      const streamKey = socket.joinedStreamData.get(roomId); // Lấy streamKey từ map
-
-      if (socket.rooms.has(roomId)) {
-        socket.leave(roomId);
-        if (streamKey) {
-          socket.joinedStreamData.delete(roomId); // Xóa mapping
-          logger.info(
-            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId} (was mapped to streamKey: ${streamKey})`
-          );
-
-          const currentViewers = await decrementLiveViewerCount(streamKey);
-          if (currentViewers !== null) {
-            io.to(roomId).emit("viewer_count_updated", {
-              streamId: roomId,
-              count: currentViewers,
-            });
-          }
-        } else {
-          logger.warn(
-            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId}, but no streamKey was mapped. No Redis update.`
-          );
-        }
-      } else {
-        logger.warn(
-          `User ${socket.user.username} (${socket.id}) tried to leave room ${roomId} they were not in.`
-        );
-      }
-    });
-
-    socket.on("disconnect", async () => {
-      logger.info(
-        `User disconnected: ${socket.id}, UserInfo: ${socket.user?.username}. Cleaning up joined rooms.`
-      );
-      if (socket.joinedStreamData && socket.joinedStreamData.size > 0) {
-        for (const [roomId, streamKey] of socket.joinedStreamData.entries()) {
-          try {
-            logger.info(
-              `Processing disconnect for user ${socket.user?.username} from room (streamId): ${roomId} (mapped to streamKey: ${streamKey})`
-            );
-            const currentViewers = await decrementLiveViewerCount(streamKey);
-            if (currentViewers !== null) {
-              // Vẫn phát tới phòng dựa trên roomId (streamId)
-              io.to(roomId).emit("viewer_count_updated", {
-                streamId: roomId,
-                count: currentViewers,
-              });
-              logger.info(
-                `Sent viewer_count_updated to room ${roomId} after user ${socket.user?.username} disconnected. New count: ${currentViewers}`
-              );
-            }
-          } catch (error) {
-            logger.error(
-              `Error decrementing viewer count for streamKey ${streamKey} (room ${roomId}) on disconnect for user ${socket.user?.username}:`,
-              error
-            );
-          }
-        }
-        socket.joinedStreamData.clear();
-      }
-    });
-  });
-};
-
-export default initializeSocketHandlers;
 ```
 
 ## File: src/utils/videoUtils.js
@@ -1964,6 +2436,105 @@ const Category = sequelize.define(
 export default Category;
 ```
 
+## File: src/models/index.js
+```javascript
+import sequelize from "../config/database.js";
+import User from "./user.js";
+import Stream from "./stream.js";
+import VOD from "./vod.js";
+import Category from "./category.js";
+import Follow from "./follow.js";
+import Notification from "./notification.js";
+
+// --- Định nghĩa Associations ---
+
+// User <-> Stream (One-to-Many)
+User.hasMany(Stream, {
+  foreignKey: "userId",
+  as: "streams",
+  onDelete: "CASCADE",
+});
+Stream.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+// User <-> VOD (One-to-Many)
+User.hasMany(VOD, {
+  foreignKey: "userId",
+  as: "vods",
+  onDelete: "CASCADE",
+});
+VOD.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+// Stream <-> VOD (One-to-Many)
+Stream.hasMany(VOD, {
+  foreignKey: "streamId",
+  as: "vods",
+  onDelete: "CASCADE",
+});
+VOD.belongsTo(Stream, {
+  foreignKey: "streamId",
+  as: "stream",
+});
+
+// Category <-> Stream (One-to-Many)
+Category.hasMany(Stream, {
+  foreignKey: "categoryId",
+  as: "streams",
+  onDelete: "SET NULL",
+});
+Stream.belongsTo(Category, {
+  foreignKey: "categoryId",
+  as: "category",
+});
+
+// Category <-> VOD (One-to-Many)
+Category.hasMany(VOD, {
+  foreignKey: "categoryId",
+  as: "categoryVods",
+  onDelete: "SET NULL",
+});
+VOD.belongsTo(Category, {
+  foreignKey: "categoryId",
+  as: "category",
+});
+
+// --- Associations cho Follow và Notification (theo task.md) ---
+
+// User <-> Follow
+User.hasMany(Follow, {
+  foreignKey: "followerId",
+  as: "followers",
+  onDelete: "CASCADE",
+});
+User.hasMany(Follow, {
+  foreignKey: "followingId",
+  as: "following",
+  onDelete: "CASCADE",
+});
+Follow.belongsTo(User, { foreignKey: "followerId", as: "follower" });
+Follow.belongsTo(User, { foreignKey: "followingId", as: "following" });
+
+// User <-> Notification
+User.hasMany(Notification, {
+  foreignKey: "userId",
+  as: "notifications",
+  onDelete: "CASCADE",
+});
+Notification.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+// --- Export Models và Sequelize Instance ---
+
+export { sequelize, User, Stream, VOD, Category, Follow, Notification };
+```
+
 ## File: src/models/user.js
 ```javascript
 import { DataTypes } from "sequelize";
@@ -2567,6 +3138,354 @@ const findCategoryByIdOrSlug = async (identifier, includeB2Details = false) => {
   }
   return category;
 };
+```
+
+## File: src/socketHandlers.js
+```javascript
+import jwt from "jsonwebtoken";
+// import mongoose from "mongoose"; // Không cần trực tiếp nữa
+import dotenv from "dotenv";
+import {
+  saveChatMessage,
+  getChatHistoryByStreamId,
+} from "./services/chatService.js";
+import {
+  getStreamKeyAndStatusById,
+  incrementLiveViewerCount,
+  decrementLiveViewerCount,
+  // getLiveViewerCount, // Không cần trực tiếp ở đây nữa nếu viewer_count_updated gửi count
+} from "./services/streamService.js"; // Import stream service functions
+import appEmitter from "./utils/appEvents.js"; // Sửa đường dẫn import
+
+dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+// const MONGODB_URI = process.env.MONGODB_URI; // Không cần trực tiếp nữa
+
+// Kết nối MongoDB đã chuyển sang src/config/mongodb.js và gọi ở src/index.js
+
+// Định nghĩa Schema và Model cho ChatMessage đã chuyển sang src/models/mongo/ChatMessage.js
+// const ChatMessage = mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);
+
+const logger = {
+  info: console.log,
+  error: console.error,
+  warn: console.warn,
+}; // Basic logger
+
+const initializeSocketHandlers = (io) => {
+  // Middleware xác thực JWT cho Socket.IO
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token; // Client gửi token qua socket.handshake.auth
+    if (!token) {
+      return next(new Error("Authentication error: Token not provided"));
+    }
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+      if (err) {
+        logger.error("Socket JWT verification error:", err.message);
+        return next(new Error("Authentication error: Invalid token"));
+      }
+      socket.user = decoded; // Gán thông tin user vào socket
+      // Lưu trữ map của roomId (streamId) tới streamKey
+      socket.joinedStreamData = new Map(); // Map<roomIdString, streamKeyString>
+      next();
+    });
+  });
+
+  // Lắng nghe sự kiện stream kết thúc từ appEmitter
+  appEmitter.on("stream:ended", ({ streamId, streamKey }) => {
+    const roomId = streamId; // streamId đã là string từ emitter
+    logger.info(
+      `'stream:ended' event received in socketHandlers for roomId: ${roomId}, streamKey: ${streamKey}.`
+    );
+    // Thông báo cho tất cả client trong phòng rằng stream đã kết thúc
+    io.to(roomId).emit("stream_ended_notification", {
+      roomId: roomId,
+      message: `Stream ${streamKey} has ended. Chat is now disabled for this room.`,
+    });
+
+    // Buộc tất cả các socket trong phòng này rời khỏi phòng
+    // io.socketsLeave(roomId) không được khuyến khích trực tiếp, thay vào đó dùng io.in(roomId).disconnectSockets(true) (Socket.IO v4+)
+    // Hoặc lấy danh sách sockets và cho từng cái leave
+    const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
+    if (socketsInRoom) {
+      socketsInRoom.forEach((socketId) => {
+        const socketInstance = io.sockets.sockets.get(socketId);
+        if (socketInstance) {
+          socketInstance.leave(roomId);
+          // Xóa dữ liệu phòng đã join khỏi socket đó nếu cần, tuy nhiên sự kiện disconnect của socket đó sẽ tự xử lý joinedStreamData
+          logger.info(
+            `Socket ${socketId} forcefully left room ${roomId} because stream ended.`
+          );
+        }
+      });
+    } else {
+      logger.info(
+        `No sockets found in room ${roomId} to remove after stream ended.`
+      );
+    }
+    // Hoặc một cách đơn giản hơn nếu chỉ muốn họ không nhận thêm event từ phòng này và để client tự xử lý:
+    // io.in(roomId).emit('force_leave_room', { roomId }); // Client sẽ phải lắng nghe sự kiện này và tự gọi socket.leave
+    // Tuy nhiên, io.socketsLeave(roomId); hoặc lặp và gọi leave là cách server-side chủ động hơn.
+    // Với Socket.IO v4, cách tốt nhất là:
+    // io.in(roomId).disconnectSockets(true); // true để đóng kết nối ngầm
+    // Nếu bạn dùng io.socketsLeave, nó có thể không hoạt động như mong đợi trong mọi trường hợp.
+    // Sử dụng lặp qua các socket và .leave() là một cách an toàn hơn nếu io.socketsLeave() không hoạt động.
+
+    // Xem xét sử dụng io.in(roomId).disconnectSockets(true) cho Socket.IO v4+
+    // Dòng dưới đây sẽ cố gắng ngắt kết nối các client trong phòng đó.
+    // Điều này cũng sẽ kích hoạt sự kiện 'disconnect' trên từng client, nơi bạn đã có logic dọn dẹp.
+    io.in(roomId).disconnectSockets(true);
+    logger.info(`Attempted to disconnect sockets in room ${roomId}.`);
+  });
+
+  io.on("connection", (socket) => {
+    logger.info(
+      `User connected: ${socket.id}, UserInfo: ${socket.user?.username}`
+    );
+
+    // Sự kiện để tham gia phòng notification cá nhân
+    socket.on("join_notification_room", () => {
+      if (socket.user && socket.user.id) {
+        const userId = socket.user.id.toString();
+        const notificationRoom = `notification:${userId}`;
+        socket.join(notificationRoom);
+        logger.info(
+          `User ${socket.user.username} (${socket.id}) joined notification room: ${notificationRoom}`
+        );
+        socket.emit("notification_room_joined", { room: notificationRoom });
+      } else {
+        logger.warn(
+          `User ${socket.id} tried to join notification room without valid user context.`
+        );
+        socket.emit("notification_room_join_error", {
+          message: "Authentication required to join notification room.",
+        });
+      }
+    });
+
+    socket.on("join_stream_room", async (data) => {
+      const { streamId } = data;
+      const roomId = streamId?.toString();
+
+      if (!roomId) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to join with null/undefined streamId`
+        );
+        socket.emit("room_join_error", { message: "Stream ID is required." });
+        return;
+      }
+
+      try {
+        const streamDetails = await getStreamKeyAndStatusById(streamId);
+
+        if (!streamDetails || !streamDetails.streamKey) {
+          logger.warn(
+            `Stream not found or streamKey missing for streamId ${roomId} when user ${socket.user.username} (${socket.id}) tried to join.`
+          );
+          socket.emit("room_join_error", { message: "Stream not found." });
+          return;
+        }
+
+        const { streamKey, status } = streamDetails;
+
+        if (status !== "live") {
+          logger.warn(
+            `User ${socket.user.username} (${socket.id}) tried to join stream ${streamKey} (ID: ${roomId}) which is not live (status: ${status}).`
+          );
+          socket.emit("room_join_error", { message: "Stream is not live." });
+          return;
+        }
+
+        socket.join(roomId); // Join phòng bằng streamId (roomId)
+        socket.joinedStreamData.set(roomId, streamKey); // Lưu lại mapping
+
+        logger.info(
+          `User ${socket.user.username} (${socket.id}) joined room (streamId): ${roomId} (maps to streamKey: ${streamKey})`
+        );
+
+        // Gửi lịch sử chat gần đây cho user vừa join
+        try {
+          const chatHistory = await getChatHistoryByStreamId(roomId, {
+            page: 1,
+            limit: 20,
+          }); // Lấy 20 tin nhắn gần nhất
+          if (
+            chatHistory &&
+            chatHistory.messages &&
+            chatHistory.messages.length > 0
+          ) {
+            socket.emit("recent_chat_history", {
+              streamId: roomId,
+              messages: chatHistory.messages,
+            });
+            logger.info(
+              `Sent recent chat history to ${socket.user.username} for room ${roomId} (${chatHistory.messages.length} messages).`
+            );
+          }
+        } catch (historyError) {
+          logger.error(
+            `Error fetching recent chat history for room ${roomId}:`,
+            historyError
+          );
+          // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công
+        }
+
+        const currentViewers = await incrementLiveViewerCount(streamKey);
+        if (currentViewers !== null) {
+          // Phát tới phòng có tên là roomId (streamId)
+          io.to(roomId).emit("viewer_count_updated", {
+            streamId: roomId, // hoặc streamKey tùy theo client muốn định danh thế nào
+            count: currentViewers,
+          });
+        }
+        socket.emit("room_joined_successfully", {
+          streamId: roomId,
+          streamKeyForDev: streamKey,
+        }); // Gửi streamId về cho client
+
+        // Optionally, fetch and send recent chat messages or notify others
+        // socket.to(streamKey).emit('user_joined_chat', { username: socket.user.username, message: 'has joined the chat.' });
+      } catch (error) {
+        logger.error(
+          `Error during join_stream_room for streamId ${roomId} by user ${socket.user.username} (${socket.id}):`,
+          error
+        );
+        socket.emit("room_join_error", {
+          message: "Error joining stream. Please try again.",
+        });
+      }
+    });
+
+    socket.on("chat_message", async (data) => {
+      const { streamId, message } = data; // Client gửi streamId (có thể là số hoặc chuỗi)
+      const roomId = streamId?.toString(); // roomId chắc chắn là chuỗi, dùng cho tên phòng socket
+
+      if (!roomId || !message) {
+        logger.warn(
+          "Received chat_message with missing streamId or message:",
+          data
+        );
+        socket.emit("message_error", {
+          message: "Stream ID and message are required.",
+        });
+        return;
+      }
+
+      if (!socket.rooms.has(roomId)) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) sent message to room ${roomId} they are not in.`
+        );
+        socket.emit("message_error", {
+          message: `You are not in room ${roomId}.`,
+        });
+        return;
+      }
+
+      // Lấy streamKey từ map đã lưu nếu cần cho các mục đích khác (không cần cho saveChatMessage nếu nó dùng streamId)
+      // const streamKey = socket.joinedStreamData.get(roomId);
+
+      try {
+        const savedMessage = await saveChatMessage({
+          streamId: roomId, // LUÔN DÙNG roomId (là streamId.toString()) để đảm bảo là chuỗi cho MongoDB
+          userId: socket.user.id,
+          username: socket.user.username,
+          message,
+        });
+
+        // Broadcast tin nhắn đến tất cả client trong phòng streamId (roomId)
+        io.to(roomId).emit("new_message", {
+          userId: savedMessage.userId,
+          username: savedMessage.username,
+          message: savedMessage.message,
+          timestamp: savedMessage.timestamp,
+          streamId: roomId, // Trả về streamId (roomId) cho client
+        });
+      } catch (error) {
+        logger.error(
+          `Error saving or broadcasting chat message for room ${roomId}:`,
+          error
+        );
+        socket.emit("message_error", {
+          message: "Could not process your message.",
+        });
+      }
+    });
+
+    socket.on("leave_stream_room", async (data) => {
+      const { streamId } = data;
+      const roomId = streamId?.toString();
+      if (!roomId) {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to leave with null/undefined streamId`
+        );
+        return;
+      }
+
+      const streamKey = socket.joinedStreamData.get(roomId); // Lấy streamKey từ map
+
+      if (socket.rooms.has(roomId)) {
+        socket.leave(roomId);
+        if (streamKey) {
+          socket.joinedStreamData.delete(roomId); // Xóa mapping
+          logger.info(
+            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId} (was mapped to streamKey: ${streamKey})`
+          );
+
+          const currentViewers = await decrementLiveViewerCount(streamKey);
+          if (currentViewers !== null) {
+            io.to(roomId).emit("viewer_count_updated", {
+              streamId: roomId,
+              count: currentViewers,
+            });
+          }
+        } else {
+          logger.warn(
+            `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId}, but no streamKey was mapped. No Redis update.`
+          );
+        }
+      } else {
+        logger.warn(
+          `User ${socket.user.username} (${socket.id}) tried to leave room ${roomId} they were not in.`
+        );
+      }
+    });
+
+    socket.on("disconnect", async () => {
+      logger.info(
+        `User disconnected: ${socket.id}, UserInfo: ${socket.user?.username}. Cleaning up joined rooms.`
+      );
+      if (socket.joinedStreamData && socket.joinedStreamData.size > 0) {
+        for (const [roomId, streamKey] of socket.joinedStreamData.entries()) {
+          try {
+            logger.info(
+              `Processing disconnect for user ${socket.user?.username} from room (streamId): ${roomId} (mapped to streamKey: ${streamKey})`
+            );
+            const currentViewers = await decrementLiveViewerCount(streamKey);
+            if (currentViewers !== null) {
+              // Vẫn phát tới phòng dựa trên roomId (streamId)
+              io.to(roomId).emit("viewer_count_updated", {
+                streamId: roomId,
+                count: currentViewers,
+              });
+              logger.info(
+                `Sent viewer_count_updated to room ${roomId} after user ${socket.user?.username} disconnected. New count: ${currentViewers}`
+              );
+            }
+          } catch (error) {
+            logger.error(
+              `Error decrementing viewer count for streamKey ${streamKey} (room ${roomId}) on disconnect for user ${socket.user?.username}:`,
+              error
+            );
+          }
+        }
+        socket.joinedStreamData.clear();
+      }
+    });
+  });
+};
+
+export default initializeSocketHandlers;
 ```
 
 ## File: src/validators/categoryValidators.js
@@ -3269,43 +4188,6 @@ const Stream = sequelize.define(
 export default Stream;
 ```
 
-## File: src/routes/userRoutes.js
-```javascript
-import express from "express";
-import {
-  validateUserRegistration,
-  validateUserLogin,
-  validateUserProfileUpdate,
-} from "../validators/userValidators.js";
-import {
-  register,
-  login,
-  updateProfile,
-  getMyProfile,
-} from "../controllers/userController.js";
-import authenticateToken from "../middlewares/authMiddleware.js";
-import upload from "../middlewares/uploadMiddleware.js";
-
-const router = express.Router();
-
-// Public routes
-router.post("/register", validateUserRegistration, register);
-router.post("/login", validateUserLogin, login);
-
-// Protected routes (require authentication)
-router.get("/me", authenticateToken, getMyProfile);
-
-router.put(
-  "/me/profile",
-  authenticateToken,
-  upload.single("avatarFile"),
-  validateUserProfileUpdate,
-  updateProfile
-);
-
-export default router;
-```
-
 ## File: src/validators/streamValidators.js
 ```javascript
 import { body, param, query } from "express-validator";
@@ -3435,127 +4317,6 @@ export const validateStreamSearchParams = [
 ];
 ```
 
-## File: src/controllers/userController.js
-```javascript
-import { validationResult } from "express-validator";
-import {
-  registerUser,
-  loginUser,
-  updateUserProfile,
-  getUserProfileById,
-} from "../services/userService.js";
-
-export const register = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-    const { user, token } = await registerUser(username, password);
-
-    res.status(201).json({
-      message: "User registered successfully",
-      user: {
-        id: user.id,
-        username: user.username,
-        role: user.role,
-        createdAt: user.createdAt,
-      },
-      token,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-export const login = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { username, password } = req.body;
-    const { user, token } = await loginUser(username, password);
-
-    res.status(200).json({
-      message: "Login successful",
-      user: {
-        id: user.id,
-        username: user.username,
-        role: user.role,
-      },
-      token,
-    });
-  } catch (error) {
-    res.status(401).json({ error: error.message });
-  }
-};
-
-export const updateProfile = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const userId = req.user.id;
-    const { displayName, bio } = req.body;
-    let avatarFileData = null;
-
-    if (req.file) {
-      avatarFileData = {
-        avatarFilePath: req.file.path,
-        originalAvatarFileName: req.file.originalname,
-        avatarMimeType: req.file.mimetype,
-      };
-    }
-
-    const updatedUser = await updateUserProfile(
-      userId,
-      { displayName, bio },
-      avatarFileData // Pass avatar file data to service
-    );
-
-    res.status(200).json({
-      message: "Profile updated successfully",
-      user: {
-        id: updatedUser.id,
-        username: updatedUser.username,
-        displayName: updatedUser.displayName,
-        avatarUrl: updatedUser.avatarUrl,
-        bio: updatedUser.bio,
-        role: updatedUser.role,
-        updatedAt: updatedUser.updatedAt,
-        // Consider also returning b2 related fields if needed by client,
-        // or keep them server-side only.
-        b2AvatarFileId: updatedUser.b2AvatarFileId,
-        b2AvatarFileName: updatedUser.b2AvatarFileName,
-        avatarUrlExpiresAt: updatedUser.avatarUrlExpiresAt,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-export const getMyProfile = async (req, res) => {
-  try {
-    const userId = req.user.id; // Lấy userId từ token đã được xác thực
-    const userProfile = await getUserProfileById(userId);
-
-    // userProfile đã được service lọc các trường cần thiết
-    res.status(200).json(userProfile);
-  } catch (error) {
-    // Nếu service ném AppError, nó sẽ có statusCode
-    const statusCode = error.statusCode || 500;
-    res.status(statusCode).json({ error: error.message });
-  }
-};
-```
-
 ## File: src/routes/streamRoutes.js
 ```javascript
 import express from "express";
@@ -3608,6 +4369,49 @@ router.get("/search", validateStreamSearchParams, searchStreams);
 
 // GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
 router.get("/:streamId", validateGetStreamById, getStreamById);
+
+export default router;
+```
+
+## File: src/routes/userRoutes.js
+```javascript
+import express from "express";
+import {
+  validateUserRegistration,
+  validateUserLogin,
+  validateUserProfileUpdate,
+} from "../validators/userValidators.js";
+import {
+  register,
+  login,
+  updateProfile,
+  getMyProfile,
+  getAllUsersController,
+} from "../controllers/userController.js";
+import authenticateToken from "../middlewares/authMiddleware.js";
+import upload from "../middlewares/uploadMiddleware.js";
+
+const router = express.Router();
+
+// Public routes
+router.post("/register", validateUserRegistration, register);
+router.post("/login", validateUserLogin, login);
+
+// Protected routes (require authentication)
+router.get("/me", authenticateToken, getMyProfile);
+router.get(
+  "/all",
+  // authenticateToken,
+  getAllUsersController
+);
+
+router.put(
+  "/me/profile",
+  authenticateToken,
+  upload.single("avatarFile"),
+  validateUserProfileUpdate,
+  updateProfile
+);
 
 export default router;
 ```
@@ -3789,6 +4593,138 @@ export const vodValidationRules = {
   uploadLocalVOD,
   getVODsList, // Thêm validator mới
   validateVodSearchParams, // Đổi tên và cập nhật
+};
+```
+
+## File: src/controllers/userController.js
+```javascript
+import { validationResult } from "express-validator";
+import {
+  registerUser,
+  loginUser,
+  updateUserProfile,
+  getUserProfileById,
+  getAllUsers,
+} from "../services/userService.js";
+
+export const register = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const { user, token } = await registerUser(username, password);
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        createdAt: user.createdAt,
+      },
+      token,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const login = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    const { user, token } = await loginUser(username, password);
+
+    res.status(200).json({
+      message: "Login successful",
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+      },
+      token,
+    });
+  } catch (error) {
+    res.status(401).json({ error: error.message });
+  }
+};
+
+export const updateProfile = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const userId = req.user.id;
+    const { displayName, bio } = req.body;
+    let avatarFileData = null;
+
+    if (req.file) {
+      avatarFileData = {
+        avatarFilePath: req.file.path,
+        originalAvatarFileName: req.file.originalname,
+        avatarMimeType: req.file.mimetype,
+      };
+    }
+
+    const updatedUser = await updateUserProfile(
+      userId,
+      { displayName, bio },
+      avatarFileData // Pass avatar file data to service
+    );
+
+    res.status(200).json({
+      message: "Profile updated successfully",
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        displayName: updatedUser.displayName,
+        avatarUrl: updatedUser.avatarUrl,
+        bio: updatedUser.bio,
+        role: updatedUser.role,
+        updatedAt: updatedUser.updatedAt,
+        // Consider also returning b2 related fields if needed by client,
+        // or keep them server-side only.
+        b2AvatarFileId: updatedUser.b2AvatarFileId,
+        b2AvatarFileName: updatedUser.b2AvatarFileName,
+        avatarUrlExpiresAt: updatedUser.avatarUrlExpiresAt,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getMyProfile = async (req, res) => {
+  try {
+    const userId = req.user.id; // Lấy userId từ token đã được xác thực
+    const userProfile = await getUserProfileById(userId);
+
+    // userProfile đã được service lọc các trường cần thiết
+    res.status(200).json(userProfile);
+  } catch (error) {
+    // Nếu service ném AppError, nó sẽ có statusCode
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
+  }
+};
+
+export const getAllUsersController = async (req, res) => {
+  try {
+    const users = await getAllUsers();
+    res.status(200).json(users);
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
+  }
 };
 ```
 
@@ -4000,402 +4936,6 @@ router.post(
 );
 
 export default router;
-```
-
-## File: src/index.js
-```javascript
-import express from "express";
-import bodyParser from "body-parser";
-import cors from "cors";
-import dotenv from "dotenv";
-import http from "http";
-import { Server } from "socket.io";
-import sequelize from "./config/database.js";
-import { connectMongoDB } from "./config/mongodb.js";
-import userRoutes from "./routes/userRoutes.js";
-import streamRoutes from "./routes/streamRoutes.js";
-import webhookRoutes from "./routes/webhookRoutes.js";
-import chatRoutes from "./routes/chatRoutes.js";
-import vodRoutes from "./routes/vodRoutes.js";
-import initializeSocketHandlers from "./socketHandlers.js";
-// Import category routes
-import categoryRoutes from "./routes/categoryRoutes.js";
-import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
-
-dotenv.config();
-
-const app = express();
-const server = http.createServer(app);
-
-// Initialize Socket.IO server
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["my-custom-header"],
-    credentials: true,
-  },
-});
-
-// Middleware
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "*",
-    credentials: true,
-  })
-);
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Routes
-app.use("/api/users", userRoutes);
-app.use("/api/streams", streamRoutes);
-app.use("/api/webhook", webhookRoutes);
-app.use("/api/chat", chatRoutes);
-app.use("/api/vod", vodRoutes);
-// Add category routes
-app.use("/api/categories", categoryRoutes);
-app.use("/api/admin/categories", categoryAdminRoutes);
-
-// Base route
-app.get("/", (req, res) => {
-  res.json({ message: "Welcome to Livestream API" });
-});
-
-// Database connection and server start
-const PORT = process.env.PORT || 5000;
-
-// Initialize Socket.IO handlers (example, actual implementation might differ)
-initializeSocketHandlers(io);
-
-// Kết nối cơ sở dữ liệu
-const startServer = async () => {
-  try {
-    await sequelize.sync();
-    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
-
-    await connectMongoDB(); // Kết nối MongoDB
-
-    server.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Socket.IO initialized and listening on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error("Unable to connect to the database(s):", error);
-    process.exit(1); // Thoát nếu không kết nối được DB chính
-  }
-};
-
-startServer();
-```
-
-## File: src/services/userService.js
-```javascript
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import { User } from "../models/index.js";
-import {
-  uploadToB2AndGetPresignedUrl,
-  deleteFileFromB2,
-  generatePresignedUrlForExistingFile,
-} from "../lib/b2.service.js";
-import fs from "fs/promises";
-import fsSync from "fs";
-import { AppError, handleServiceError } from "../utils/errorHandler.js";
-import path from "path";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const logger = {
-  info: console.log,
-  error: console.error,
-  warn: console.warn,
-};
-
-const generateToken = (user) => {
-  return jwt.sign(
-    { id: user.id, username: user.username, role: user.role },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: "1h",
-    }
-  );
-};
-
-export const registerUser = async (username, password) => {
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      username,
-      password: hashedPassword,
-    });
-    const token = generateToken(user);
-    return { user, token };
-  } catch (error) {
-    throw new Error("Error registering user: " + error.message);
-  }
-};
-
-export const loginUser = async (username, password) => {
-  try {
-    const user = await User.findOne({ where: { username } });
-    if (!user) {
-      throw new Error("User not found");
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new Error("Invalid password");
-    }
-
-    const token = generateToken(user);
-    return { user, token };
-  } catch (error) {
-    throw new Error("Error logging in: " + error.message);
-  }
-};
-
-export const updateUserProfile = async (
-  userId,
-  profileData,
-  avatarFileData
-) => {
-  let newB2AvatarFileIdToDeleteOnError = null;
-  let newB2AvatarFileNameToDeleteOnError = null;
-
-  try {
-    const user = await User.findByPk(userId);
-    if (!user) {
-      throw new AppError("User not found", 404);
-    }
-
-    const { displayName, bio } = profileData;
-    const { avatarFilePath, originalAvatarFileName, avatarMimeType } =
-      avatarFileData || {};
-
-    const oldB2AvatarFileId = user.b2AvatarFileId;
-    const oldB2AvatarFileName = user.b2AvatarFileName;
-    let newAvatarB2Response = null;
-
-    if (avatarFilePath && originalAvatarFileName && avatarMimeType) {
-      logger.info(
-        `Service: New avatar provided for user ${userId}: ${avatarFilePath}`
-      );
-      const avatarStats = await fs.stat(avatarFilePath);
-      const avatarSize = avatarStats.size;
-
-      if (avatarSize > 0) {
-        const avatarStream = fsSync.createReadStream(avatarFilePath);
-        const safeOriginalAvatarFileName = originalAvatarFileName.replace(
-          /[^a-zA-Z0-9.\-_]/g,
-          "_"
-        );
-        const avatarFileNameInB2 = `users/${userId}/avatars/${Date.now()}_${safeOriginalAvatarFileName}`;
-
-        const tempB2Response = await uploadToB2AndGetPresignedUrl(
-          null,
-          0,
-          null,
-          null,
-          avatarStream,
-          avatarSize,
-          avatarFileNameInB2,
-          avatarMimeType,
-          null,
-          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
-            3600 * 24 * 30
-        );
-
-        newAvatarB2Response = tempB2Response.thumbnail;
-
-        if (!newAvatarB2Response || !newAvatarB2Response.url) {
-          logger.error(
-            "Service: Error uploading new avatar to B2, no response or URL."
-          );
-          throw new AppError("Could not upload new avatar to B2.", 500);
-        }
-
-        newB2AvatarFileIdToDeleteOnError = newAvatarB2Response.b2FileId;
-        newB2AvatarFileNameToDeleteOnError = newAvatarB2Response.b2FileName;
-
-        user.avatarUrl = newAvatarB2Response.url;
-        user.avatarUrlExpiresAt = newAvatarB2Response.urlExpiresAt;
-        user.b2AvatarFileId = newAvatarB2Response.b2FileId;
-        user.b2AvatarFileName = newAvatarB2Response.b2FileName;
-
-        logger.info(
-          `Service: New avatar uploaded to B2 successfully: ${newAvatarB2Response.b2FileName}`
-        );
-      } else {
-        logger.warn("Service: New avatar file provided but size is 0.");
-      }
-    }
-
-    if (displayName !== undefined) user.displayName = displayName;
-    if (bio !== undefined) user.bio = bio;
-
-    await user.save();
-    logger.info(`Service: User profile ${userId} updated successfully.`);
-
-    if (newAvatarB2Response && oldB2AvatarFileId && oldB2AvatarFileName) {
-      try {
-        logger.info(
-          `Service: Deleting old avatar ${oldB2AvatarFileName} (ID: ${oldB2AvatarFileId}) from B2.`
-        );
-        await deleteFileFromB2(oldB2AvatarFileName, oldB2AvatarFileId);
-        logger.info(
-          `Service: Deleted old avatar ${oldB2AvatarFileName} from B2.`
-        );
-      } catch (deleteError) {
-        logger.error(
-          `Service: Error deleting old avatar ${oldB2AvatarFileName} from B2: ${deleteError.message}`
-        );
-      }
-    }
-
-    if (avatarFilePath) {
-      try {
-        await fs.unlink(avatarFilePath);
-        logger.info(
-          `Service: Temporary avatar file ${avatarFilePath} deleted.`
-        );
-      } catch (unlinkError) {
-        logger.error(
-          `Service: Error deleting temporary avatar file ${avatarFilePath}: ${unlinkError.message}`
-        );
-      }
-    }
-
-    return user;
-  } catch (error) {
-    logger.error(
-      `Service: Error in updateUserProfile for user ${userId}:`,
-      error
-    );
-
-    if (
-      newB2AvatarFileIdToDeleteOnError &&
-      newB2AvatarFileNameToDeleteOnError
-    ) {
-      try {
-        logger.warn(
-          `Service: Cleaning up NEW avatar ${newB2AvatarFileNameToDeleteOnError} from B2 due to error during profile update.`
-        );
-        await deleteFileFromB2(
-          newB2AvatarFileNameToDeleteOnError,
-          newB2AvatarFileIdToDeleteOnError
-        );
-      } catch (deleteB2Error) {
-        logger.error(
-          `Service: Critical error cleaning up NEW avatar ${newB2AvatarFileNameToDeleteOnError} from B2: ${deleteB2Error}`
-        );
-      }
-    }
-
-    if (avatarFileData && avatarFileData.avatarFilePath) {
-      try {
-        if (fsSync.existsSync(avatarFileData.avatarFilePath)) {
-          await fs.unlink(avatarFileData.avatarFilePath);
-          logger.info(
-            `Service: Temporary avatar file ${avatarFileData.avatarFilePath} deleted due to error.`
-          );
-        }
-      } catch (unlinkError) {
-        logger.error(
-          `Service: Error deleting temporary avatar file ${avatarFileData.avatarFilePath} during error handling: ${unlinkError.message}`
-        );
-      }
-    }
-
-    if (error instanceof AppError) throw error;
-    throw new AppError(
-      `Could not update user profile: ${error.message}`,
-      error.statusCode || 500
-    );
-  }
-};
-
-export const getUserProfileById = async (userId) => {
-  try {
-    const user = await User.findByPk(userId, {
-      attributes: [
-        "id",
-        "username",
-        "displayName",
-        "avatarUrl",
-        "avatarUrlExpiresAt",
-        "b2AvatarFileId",
-        "b2AvatarFileName",
-        "bio",
-        "role",
-        "createdAt",
-        "updatedAt",
-      ],
-    });
-    if (!user) {
-      throw new AppError("User not found", 404);
-    }
-
-    // Logic to refresh avatarUrl if expired or nearing expiry
-    const presignedUrlDurationImages =
-      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
-      3600 * 24 * 7; // 7 days default for images
-    const now = new Date();
-    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
-
-    if (
-      user.avatarUrl &&
-      user.b2AvatarFileName &&
-      (!user.avatarUrlExpiresAt ||
-        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
-    ) {
-      try {
-        logger.info(
-          `Service: Pre-signed URL for avatar of user ${userId} (file: ${user.b2AvatarFileName}) is expired or expiring soon. Refreshing...`
-        );
-        const newAvatarUrl = await generatePresignedUrlForExistingFile(
-          user.b2AvatarFileName,
-          presignedUrlDurationImages
-        );
-        user.avatarUrl = newAvatarUrl;
-        user.avatarUrlExpiresAt = new Date(
-          Date.now() + presignedUrlDurationImages * 1000
-        );
-        await user.save();
-        logger.info(
-          `Service: Refreshed pre-signed URL for avatar of user ${userId}. New expiry: ${user.avatarUrlExpiresAt}`
-        );
-      } catch (refreshError) {
-        logger.error(
-          `Service: Failed to refresh avatar URL for user ${userId} (file: ${user.b2AvatarFileName}): ${refreshError.message}`
-        );
-        // Continue with potentially stale URL, or handle error differently
-      }
-    } else if (
-      user.avatarUrl &&
-      !user.b2AvatarFileName &&
-      (!user.avatarUrlExpiresAt ||
-        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
-    ) {
-      logger.warn(
-        `Service: Avatar URL for user ${userId} needs refresh, but b2AvatarFileName is missing.`
-      );
-    }
-
-    return user;
-  } catch (error) {
-    logger.error(
-      `Service: Error in getUserProfileById for user ${userId}:`,
-      error
-    );
-    if (error instanceof AppError) throw error;
-    throw new AppError(
-      `Could not retrieve user profile: ${error.message}`,
-      error.statusCode || 500
-    );
-  }
-};
 ```
 
 ## File: src/controllers/streamController.js
@@ -5141,6 +5681,435 @@ export const vodController = {
 };
 ```
 
+## File: src/index.js
+```javascript
+import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
+import dotenv from "dotenv";
+import http from "http";
+import { Server } from "socket.io";
+import sequelize from "./config/database.js";
+import { connectMongoDB } from "./config/mongodb.js";
+import userRoutes from "./routes/userRoutes.js";
+import streamRoutes from "./routes/streamRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
+import chatRoutes from "./routes/chatRoutes.js";
+import vodRoutes from "./routes/vodRoutes.js";
+import initializeSocketHandlers from "./socketHandlers.js";
+import { setIoInstance as setNotificationServiceIo } from "./services/notificationService.js";
+// Import category routes
+import categoryRoutes from "./routes/categoryRoutes.js";
+import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
+import followRoutes from "./routes/followRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
+
+dotenv.config();
+
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.IO server
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "*",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["my-custom-header"],
+    credentials: true,
+  },
+});
+
+setNotificationServiceIo(io);
+
+// Middleware
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "*",
+    credentials: true,
+  })
+);
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Routes
+app.use("/api/users", userRoutes);
+app.use("/api/social", followRoutes);
+app.use("/api/streams", streamRoutes);
+app.use("/api/webhook", webhookRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/vod", vodRoutes);
+app.use("/api/notifications", notificationRoutes);
+// Add category routes
+app.use("/api/categories", categoryRoutes);
+app.use("/api/admin/categories", categoryAdminRoutes);
+
+// Base route
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Livestream API" });
+});
+
+// Database connection and server start
+const PORT = process.env.PORT || 5000;
+
+// Initialize Socket.IO handlers (example, actual implementation might differ)
+initializeSocketHandlers(io);
+
+// Kết nối cơ sở dữ liệu
+const startServer = async () => {
+  try {
+    await sequelize.sync();
+    console.log("Database (PostgreSQL/Sequelize) connected successfully.");
+
+    await connectMongoDB(); // Kết nối MongoDB
+
+    server.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+      console.log(`Socket.IO initialized and listening on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Unable to connect to the database(s):", error);
+    process.exit(1); // Thoát nếu không kết nối được DB chính
+  }
+};
+
+startServer();
+```
+
+## File: src/services/userService.js
+```javascript
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { User } from "../models/index.js";
+import {
+  uploadToB2AndGetPresignedUrl,
+  deleteFileFromB2,
+  generatePresignedUrlForExistingFile,
+} from "../lib/b2.service.js";
+import fs from "fs/promises";
+import fsSync from "fs";
+import { AppError, handleServiceError } from "../utils/errorHandler.js";
+import path from "path";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const logger = {
+  info: console.log,
+  error: console.error,
+  warn: console.warn,
+};
+
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user.id, username: user.username, role: user.role },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "1h",
+    }
+  );
+};
+
+export const registerUser = async (username, password) => {
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      username,
+      password: hashedPassword,
+    });
+    const token = generateToken(user);
+    return { user, token };
+  } catch (error) {
+    throw new Error("Error registering user: " + error.message);
+  }
+};
+
+export const loginUser = async (username, password) => {
+  try {
+    const user = await User.findOne({ where: { username } });
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new Error("Invalid password");
+    }
+
+    const token = generateToken(user);
+    return { user, token };
+  } catch (error) {
+    throw new Error("Error logging in: " + error.message);
+  }
+};
+
+export const updateUserProfile = async (
+  userId,
+  profileData,
+  avatarFileData
+) => {
+  let newB2AvatarFileIdToDeleteOnError = null;
+  let newB2AvatarFileNameToDeleteOnError = null;
+
+  try {
+    const user = await User.findByPk(userId);
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    const { displayName, bio } = profileData;
+    const { avatarFilePath, originalAvatarFileName, avatarMimeType } =
+      avatarFileData || {};
+
+    const oldB2AvatarFileId = user.b2AvatarFileId;
+    const oldB2AvatarFileName = user.b2AvatarFileName;
+    let newAvatarB2Response = null;
+
+    if (avatarFilePath && originalAvatarFileName && avatarMimeType) {
+      logger.info(
+        `Service: New avatar provided for user ${userId}: ${avatarFilePath}`
+      );
+      const avatarStats = await fs.stat(avatarFilePath);
+      const avatarSize = avatarStats.size;
+
+      if (avatarSize > 0) {
+        const avatarStream = fsSync.createReadStream(avatarFilePath);
+        const safeOriginalAvatarFileName = originalAvatarFileName.replace(
+          /[^a-zA-Z0-9.\-_]/g,
+          "_"
+        );
+        const avatarFileNameInB2 = `users/${userId}/avatars/${Date.now()}_${safeOriginalAvatarFileName}`;
+
+        const tempB2Response = await uploadToB2AndGetPresignedUrl(
+          null,
+          0,
+          null,
+          null,
+          avatarStream,
+          avatarSize,
+          avatarFileNameInB2,
+          avatarMimeType,
+          null,
+          parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+            3600 * 24 * 30
+        );
+
+        newAvatarB2Response = tempB2Response.thumbnail;
+
+        if (!newAvatarB2Response || !newAvatarB2Response.url) {
+          logger.error(
+            "Service: Error uploading new avatar to B2, no response or URL."
+          );
+          throw new AppError("Could not upload new avatar to B2.", 500);
+        }
+
+        newB2AvatarFileIdToDeleteOnError = newAvatarB2Response.b2FileId;
+        newB2AvatarFileNameToDeleteOnError = newAvatarB2Response.b2FileName;
+
+        user.avatarUrl = newAvatarB2Response.url;
+        user.avatarUrlExpiresAt = newAvatarB2Response.urlExpiresAt;
+        user.b2AvatarFileId = newAvatarB2Response.b2FileId;
+        user.b2AvatarFileName = newAvatarB2Response.b2FileName;
+
+        logger.info(
+          `Service: New avatar uploaded to B2 successfully: ${newAvatarB2Response.b2FileName}`
+        );
+      } else {
+        logger.warn("Service: New avatar file provided but size is 0.");
+      }
+    }
+
+    if (displayName !== undefined) user.displayName = displayName;
+    if (bio !== undefined) user.bio = bio;
+
+    await user.save();
+    logger.info(`Service: User profile ${userId} updated successfully.`);
+
+    if (newAvatarB2Response && oldB2AvatarFileId && oldB2AvatarFileName) {
+      try {
+        logger.info(
+          `Service: Deleting old avatar ${oldB2AvatarFileName} (ID: ${oldB2AvatarFileId}) from B2.`
+        );
+        await deleteFileFromB2(oldB2AvatarFileName, oldB2AvatarFileId);
+        logger.info(
+          `Service: Deleted old avatar ${oldB2AvatarFileName} from B2.`
+        );
+      } catch (deleteError) {
+        logger.error(
+          `Service: Error deleting old avatar ${oldB2AvatarFileName} from B2: ${deleteError.message}`
+        );
+      }
+    }
+
+    if (avatarFilePath) {
+      try {
+        await fs.unlink(avatarFilePath);
+        logger.info(
+          `Service: Temporary avatar file ${avatarFilePath} deleted.`
+        );
+      } catch (unlinkError) {
+        logger.error(
+          `Service: Error deleting temporary avatar file ${avatarFilePath}: ${unlinkError.message}`
+        );
+      }
+    }
+
+    return user;
+  } catch (error) {
+    logger.error(
+      `Service: Error in updateUserProfile for user ${userId}:`,
+      error
+    );
+
+    if (
+      newB2AvatarFileIdToDeleteOnError &&
+      newB2AvatarFileNameToDeleteOnError
+    ) {
+      try {
+        logger.warn(
+          `Service: Cleaning up NEW avatar ${newB2AvatarFileNameToDeleteOnError} from B2 due to error during profile update.`
+        );
+        await deleteFileFromB2(
+          newB2AvatarFileNameToDeleteOnError,
+          newB2AvatarFileIdToDeleteOnError
+        );
+      } catch (deleteB2Error) {
+        logger.error(
+          `Service: Critical error cleaning up NEW avatar ${newB2AvatarFileNameToDeleteOnError} from B2: ${deleteB2Error}`
+        );
+      }
+    }
+
+    if (avatarFileData && avatarFileData.avatarFilePath) {
+      try {
+        if (fsSync.existsSync(avatarFileData.avatarFilePath)) {
+          await fs.unlink(avatarFileData.avatarFilePath);
+          logger.info(
+            `Service: Temporary avatar file ${avatarFileData.avatarFilePath} deleted due to error.`
+          );
+        }
+      } catch (unlinkError) {
+        logger.error(
+          `Service: Error deleting temporary avatar file ${avatarFileData.avatarFilePath} during error handling: ${unlinkError.message}`
+        );
+      }
+    }
+
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not update user profile: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+
+export const getUserProfileById = async (userId) => {
+  try {
+    const user = await User.findByPk(userId, {
+      attributes: [
+        "id",
+        "username",
+        "displayName",
+        "avatarUrl",
+        "avatarUrlExpiresAt",
+        "b2AvatarFileId",
+        "b2AvatarFileName",
+        "bio",
+        "role",
+        "createdAt",
+        "updatedAt",
+      ],
+    });
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    // Logic to refresh avatarUrl if expired or nearing expiry
+    const presignedUrlDurationImages =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+      3600 * 24 * 7; // 7 days default for images
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 3600 * 1000);
+
+    if (
+      user.avatarUrl &&
+      user.b2AvatarFileName &&
+      (!user.avatarUrlExpiresAt ||
+        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
+    ) {
+      try {
+        logger.info(
+          `Service: Pre-signed URL for avatar of user ${userId} (file: ${user.b2AvatarFileName}) is expired or expiring soon. Refreshing...`
+        );
+        const newAvatarUrl = await generatePresignedUrlForExistingFile(
+          user.b2AvatarFileName,
+          presignedUrlDurationImages
+        );
+        user.avatarUrl = newAvatarUrl;
+        user.avatarUrlExpiresAt = new Date(
+          Date.now() + presignedUrlDurationImages * 1000
+        );
+        await user.save();
+        logger.info(
+          `Service: Refreshed pre-signed URL for avatar of user ${userId}. New expiry: ${user.avatarUrlExpiresAt}`
+        );
+      } catch (refreshError) {
+        logger.error(
+          `Service: Failed to refresh avatar URL for user ${userId} (file: ${user.b2AvatarFileName}): ${refreshError.message}`
+        );
+        // Continue with potentially stale URL, or handle error differently
+      }
+    } else if (
+      user.avatarUrl &&
+      !user.b2AvatarFileName &&
+      (!user.avatarUrlExpiresAt ||
+        new Date(user.avatarUrlExpiresAt) < oneHourFromNow)
+    ) {
+      logger.warn(
+        `Service: Avatar URL for user ${userId} needs refresh, but b2AvatarFileName is missing.`
+      );
+    }
+
+    return user;
+  } catch (error) {
+    logger.error(
+      `Service: Error in getUserProfileById for user ${userId}:`,
+      error
+    );
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not retrieve user profile: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+
+export const getAllUsers = async () => {
+  try {
+    const users = await User.findAll({
+      attributes: [
+        "id",
+        "username",
+        "displayName",
+        "avatarUrl",
+        "avatarUrlExpiresAt",
+        "bio",
+        "role",
+        "createdAt",
+        "updatedAt",
+      ],
+    });
+    // Optionally, you can implement logic to refresh avatarUrls here if needed, similar to getUserProfileById
+    return users;
+  } catch (error) {
+    logger.error("Service: Error in getAllUsers:", error);
+    throw new AppError(
+      `Could not retrieve users: ${error.message}`,
+      error.statusCode || 500
+    );
+  }
+};
+```
+
 ## File: src/services/vodService.js
 ```javascript
 import { VOD, User, Stream, Category } from "../models/index.js";
@@ -5163,13 +6132,10 @@ import { Readable } from "stream";
 import { Op } from "sequelize";
 import { Sequelize } from "sequelize";
 import redisClient from "../lib/redis.js";
+import notificationService from "./notificationService.js";
+import logger from "../utils/logger.js";
 
 dotenv.config();
-
-const logger = {
-  info: console.log,
-  error: console.error,
-};
 
 // Cache để lưu trữ lượt xem gần đây (vodId -> Map(userIdOrIp -> timestamp))
 // const recentViewsCache = new Map(); // Loại bỏ cache Map trong bộ nhớ
@@ -5455,13 +6421,15 @@ const processRecordedFileToVOD = async ({
   originalFileName, // e.g., streamkey.flv
 }) => {
   let mp4FilePath = null;
-  let thumbnailFilePath = null;
+  // let thumbnailFilePath = null; // Biến này sẽ được thay thế bằng extractedThumbnailTempPath nếu cần
   let b2UploadResponse = null;
+  const tempFilesToDeleteOnError = []; // Lưu các file tạm đã tạo để xóa nếu có lỗi sớm
 
   try {
     // 0. Kiểm tra file gốc tồn tại
     try {
       await fs.access(originalFilePath);
+      tempFilesToDeleteOnError.push(originalFilePath); // Thêm vào đây để xóa nếu các bước sau lỗi
     } catch (e) {
       throw new AppError(
         `Original recorded file not found at ${originalFilePath}`,
@@ -5480,106 +6448,170 @@ const processRecordedFileToVOD = async ({
         400
       );
     }
-    const streamCategoryId = stream.categoryId; // Lấy categoryId từ stream
+    const streamCategoryId = stream.categoryId;
 
-    // 2. Tạo đường dẫn cho file MP4 và Thumbnail
+    // 2. Tạo đường dẫn cho file MP4
     const baseName = path.basename(
       originalFileName,
       path.extname(originalFileName)
     );
     const tempDir = path.dirname(originalFilePath);
-
     mp4FilePath = path.join(tempDir, `${baseName}.mp4`);
-    // Đặt tên file thumbnail rõ ràng hơn, ví dụ sử dụng baseName của video
-    thumbnailFilePath = path.join(tempDir, `${baseName}-thumbnail.jpg`);
-
-    // 3. Chuyển đổi FLV sang MP4
     await convertFlvToMp4(originalFilePath, mp4FilePath);
+    tempFilesToDeleteOnError.push(mp4FilePath); // Thêm mp4 vào danh sách xóa nếu lỗi
 
-    // 4. Lấy thời lượng video (từ file MP4 đã convert)
+    // 3. Lấy thời lượng video (từ file MP4 đã convert)
     const durationSeconds = await getVideoDurationInSeconds(mp4FilePath);
 
-    // 5. Trích xuất Thumbnail (từ file MP4)
-    let thumbnailTimestampString;
-    if (durationSeconds >= 5) {
-      thumbnailTimestampString = "00:00:05.000";
-    } else if (durationSeconds >= 1) {
-      // For videos between 1s and 5s, take thumbnail at 1s
-      thumbnailTimestampString = formatDurationForFFmpeg(1);
-    } else if (durationSeconds > 0) {
-      // For videos shorter than 1s, take thumbnail at 10% of duration (but at least 0.001s)
-      const seekTime = Math.max(0.001, durationSeconds * 0.1);
-      thumbnailTimestampString = formatDurationForFFmpeg(seekTime);
-    } else {
-      // Duration is 0 or invalid
-      thumbnailTimestampString = "00:00:00.001";
-      logger.warn(
-        `Video duration is ${durationSeconds}s. Attempting to extract the earliest possible frame for thumbnail for ${mp4FilePath}.`
-      );
-    }
-    logger.info(
-      `Attempting to extract thumbnail for ${mp4FilePath} at ${thumbnailTimestampString} (video duration: ${durationSeconds}s)`
-    );
-    await extractThumbnail(
-      mp4FilePath,
-      thumbnailFilePath,
-      thumbnailTimestampString
-    );
+    // 4. Xử lý Thumbnail
+    let finalVodThumbnailInfo = {
+      url: null,
+      urlExpiresAt: null,
+      b2FileId: null,
+      b2FileName: null,
+    };
+    let localThumbnailToUploadPath = null; // Path của file thumbnail tạm sẽ được upload nếu được extract mới
+    const timestampForUpload = Date.now();
+    const presignedUrlDuration =
+      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7;
 
-    // 6. Chuẩn bị stream và thông tin file để upload
+    // Ưu tiên thumbnail từ Stream gốc
+    if (stream.b2ThumbnailFileName && stream.b2ThumbnailFileId) {
+      logger.info(
+        `Service: Ưu tiên sử dụng thumbnail có sẵn từ Stream gốc: ${stream.b2ThumbnailFileName}`
+      );
+      finalVodThumbnailInfo.b2FileId = stream.b2ThumbnailFileId;
+      finalVodThumbnailInfo.b2FileName = stream.b2ThumbnailFileName;
+
+      const imagePresignedUrlDuration =
+        parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+        presignedUrlDuration;
+      try {
+        finalVodThumbnailInfo.url = await generatePresignedUrlForExistingFile(
+          stream.b2ThumbnailFileName,
+          imagePresignedUrlDuration
+        );
+        finalVodThumbnailInfo.urlExpiresAt = new Date(
+          Date.now() + imagePresignedUrlDuration * 1000
+        );
+        logger.info(
+          `Service: Đã tạo pre-signed URL cho thumbnail từ Stream: ${finalVodThumbnailInfo.url}`
+        );
+      } catch (presignError) {
+        logger.error(
+          `Service: Lỗi khi tạo pre-signed URL cho thumbnail từ Stream (${stream.b2ThumbnailFileName}): ${presignError.message}. Sẽ thử extract thumbnail mới.`
+        );
+        // Reset để fallback về extract mới
+        finalVodThumbnailInfo = {
+          url: null,
+          urlExpiresAt: null,
+          b2FileId: null,
+          b2FileName: null,
+        };
+      }
+    }
+
+    // Nếu không có thumbnail từ stream (hoặc có lỗi), thì extract mới
+    if (!finalVodThumbnailInfo.b2FileName) {
+      logger.info(
+        "Service: Stream gốc không có thumbnail hợp lệ hoặc không thể tạo URL. Tiến hành trích xuất thumbnail mới."
+      );
+      const extractedThumbnailTempPath = path.join(
+        tempDir,
+        `${baseName}-extracted-thumbnail-${timestampForUpload}.jpg`
+      );
+
+      let thumbnailTimestampString;
+      if (durationSeconds >= 5) {
+        thumbnailTimestampString = "00:00:05.000";
+      } else if (durationSeconds >= 1) {
+        thumbnailTimestampString = formatDurationForFFmpeg(1);
+      } else if (durationSeconds > 0) {
+        const seekTime = Math.max(0.001, durationSeconds * 0.1);
+        thumbnailTimestampString = formatDurationForFFmpeg(seekTime);
+      } else {
+        thumbnailTimestampString = "00:00:00.001";
+        logger.warn(
+          `Video duration is ${durationSeconds}s. Attempting to extract the earliest possible frame for thumbnail for ${mp4FilePath}.`
+        );
+      }
+      logger.info(
+        `Service: Trích xuất thumbnail cho ${mp4FilePath} tại ${thumbnailTimestampString}`
+      );
+      try {
+        await extractThumbnail(
+          mp4FilePath,
+          extractedThumbnailTempPath,
+          thumbnailTimestampString
+        );
+        localThumbnailToUploadPath = extractedThumbnailTempPath;
+        tempFilesToDeleteOnError.push(extractedThumbnailTempPath); // Thêm vào danh sách xóa nếu lỗi
+        logger.info(
+          `Service: Thumbnail mới đã được trích xuất tại: ${localThumbnailToUploadPath}`
+        );
+      } catch (extractErr) {
+        logger.error(
+          `Service: Lỗi khi trích xuất thumbnail mới từ video ${mp4FilePath}: ${extractErr.message}. VOD sẽ không có thumbnail.`
+        );
+        localThumbnailToUploadPath = null;
+      }
+    }
+
+    // 5. Chuẩn bị stream và thông tin file để upload
     logger.info(`Preparing streams for MP4 file: ${mp4FilePath}`);
     const mp4FileSize = fsSync.statSync(mp4FilePath).size;
     const mp4FileStream = fsSync.createReadStream(mp4FilePath);
+    const videoFileNameInB2 = `vods/${baseName}-${timestampForUpload}.mp4`;
 
-    let thumbnailFileStream = null;
-    let thumbnailFileSize = 0;
-    let thumbnailExists = false;
-    try {
-      await fs.access(thumbnailFilePath); // Kiểm tra file thumbnail tồn tại
-      thumbnailExists = true;
-      logger.info(`Preparing stream for thumbnail file: ${thumbnailFilePath}`);
-      thumbnailFileSize = fsSync.statSync(thumbnailFilePath).size;
-      thumbnailFileStream = fsSync.createReadStream(thumbnailFilePath);
-    } catch (thumbAccessError) {
-      logger.warn(
-        `Thumbnail file at ${thumbnailFilePath} not accessible or does not exist. Proceeding without thumbnail upload.`
-      );
-      // thumbnailFileStream sẽ vẫn là null
+    let thumbnailFileStreamForUpload = null;
+    let thumbnailFileSizeForUpload = 0;
+    let thumbnailFileNameInB2ForUpload = null;
+    let thumbnailMimeTypeForUpload = null;
+
+    if (localThumbnailToUploadPath) {
+      try {
+        await fs.access(localThumbnailToUploadPath);
+        thumbnailFileSizeForUpload = fsSync.statSync(
+          localThumbnailToUploadPath
+        ).size;
+        if (thumbnailFileSizeForUpload > 0) {
+          thumbnailFileStreamForUpload = fsSync.createReadStream(
+            localThumbnailToUploadPath
+          );
+          thumbnailFileNameInB2ForUpload = `vods/thumbnails/${baseName}-thumb-${timestampForUpload}.jpg`;
+          thumbnailMimeTypeForUpload = "image/jpeg";
+        } else {
+          logger.warn(
+            `Service: File thumbnail trích xuất ${localThumbnailToUploadPath} có kích thước 0. Sẽ không upload thumbnail.`
+          );
+        }
+      } catch (thumbAccessErrorOnUpload) {
+        logger.error(
+          `Service: Không thể truy cập file thumbnail trích xuất ${localThumbnailToUploadPath} để upload: ${thumbAccessErrorOnUpload.message}. Sẽ không upload thumbnail.`
+        );
+        // Đảm bảo stream và tên file là null nếu không thể truy cập
+        thumbnailFileStreamForUpload = null;
+        thumbnailFileNameInB2ForUpload = null;
+      }
     }
-
-    // 7. Chuẩn bị tên file trên B2 và Upload MỘT LẦN
-    const timestamp = Date.now();
-    const videoFileNameInB2 = `vods/${baseName}-${timestamp}.mp4`;
-    let thumbnailFileNameInB2 = null;
-    if (thumbnailExists) {
-      thumbnailFileNameInB2 = `vods/thumbnails/${baseName}-thumb-${timestamp}.jpg`;
-    }
-
-    const presignedUrlDuration =
-      parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS) || 3600 * 24 * 7; // 7 ngày
 
     logger.info(
-      `Uploading video stream and thumbnail stream (if available) to B2...`
+      `Uploading video stream and thumbnail stream (if extracted) to B2...`
     );
-    // Giả định uploadToB2AndGetPresignedUrl đã được cập nhật để nhận stream và file size
-    // Ví dụ: uploadToB2AndGetPresignedUrl(videoStream, videoSize, videoName, videoMime, thumbStream, thumbSize, thumbName, thumbMime, metaDuration, presignedDuration)
     b2UploadResponse = await uploadToB2AndGetPresignedUrl(
       mp4FileStream,
       mp4FileSize,
       videoFileNameInB2,
       "video/mp4",
-      thumbnailFileStream, // Sẽ là null nếu không có thumbnail
-      thumbnailFileSize, // Sẽ là 0 nếu không có thumbnail
-      thumbnailFileNameInB2, // Sẽ là null nếu không có thumbnail
-      thumbnailExists ? "image/jpeg" : null, // MIME type cho thumbnail
+      thumbnailFileStreamForUpload,
+      thumbnailFileSizeForUpload,
+      thumbnailFileNameInB2ForUpload,
+      thumbnailMimeTypeForUpload,
       durationSeconds,
       presignedUrlDuration
     );
 
-    // Gán thông tin file để có thể xóa nếu bước sau lỗi
-    // (Phần này đã có trong try...catch của createVODFromUpload, nhưng ở đây là context khác)
-
-    // 8. Tạo bản ghi VOD trong DB
+    // 6. Tạo bản ghi VOD trong DB
     const vodData = {
       streamId: stream.id,
       userId: stream.userId,
@@ -5591,20 +6623,35 @@ const processRecordedFileToVOD = async ({
       b2FileId: b2UploadResponse.video.b2FileId,
       b2FileName: b2UploadResponse.video.b2FileName,
       durationSeconds,
-
-      thumbnailUrl: b2UploadResponse.thumbnail?.url || null,
-      thumbnailUrlExpiresAt: b2UploadResponse.thumbnail?.urlExpiresAt || null,
-      b2ThumbnailFileId: b2UploadResponse.thumbnail?.b2FileId || null,
-      b2ThumbnailFileName: b2UploadResponse.thumbnail?.b2FileName || null,
       categoryId: streamCategoryId,
+      thumbnailUrl: null, // Default to null
+      thumbnailUrlExpiresAt: null,
+      b2ThumbnailFileId: null,
+      b2ThumbnailFileName: null,
     };
+
+    if (finalVodThumbnailInfo.b2FileName) {
+      // Ưu tiên thumbnail từ stream nếu đã lấy được
+      vodData.thumbnailUrl = finalVodThumbnailInfo.url;
+      vodData.thumbnailUrlExpiresAt = finalVodThumbnailInfo.urlExpiresAt;
+      vodData.b2ThumbnailFileId = finalVodThumbnailInfo.b2FileId;
+      vodData.b2ThumbnailFileName = finalVodThumbnailInfo.b2FileName;
+    } else if (
+      b2UploadResponse.thumbnail &&
+      b2UploadResponse.thumbnail.b2FileName
+    ) {
+      // Nếu đã upload thumbnail mới thành công
+      vodData.thumbnailUrl = b2UploadResponse.thumbnail.url;
+      vodData.thumbnailUrlExpiresAt = b2UploadResponse.thumbnail.urlExpiresAt;
+      vodData.b2ThumbnailFileId = b2UploadResponse.thumbnail.b2FileId;
+      vodData.b2ThumbnailFileName = b2UploadResponse.thumbnail.b2FileName;
+    }
 
     logger.info("Creating VOD entry in database with data:", {
       ...vodData,
       videoUrl: "HIDDEN",
-      thumbnailUrl: "HIDDEN",
+      thumbnailUrl: vodData.thumbnailUrl ? "HIDDEN" : null,
     });
-    // Nên sử dụng hàm createVOD service để thống nhất logic tạo VOD
     const newVOD = await createVOD(vodData);
     logger.info(`VOD entry created with ID: ${newVOD.id}`);
 
@@ -5620,7 +6667,8 @@ const processRecordedFileToVOD = async ({
       b2UploadResponse?.video?.b2FileName
     ) {
       try {
-        logger.info(
+        logger.warn(
+          // Changed to warn as it's a cleanup action
           `Service: Dọn dẹp video ${b2UploadResponse.video.b2FileName} trên B2 do lỗi trong processRecordedFileToVOD.`
         );
         await deleteFileFromB2(
@@ -5634,13 +6682,18 @@ const processRecordedFileToVOD = async ({
         );
       }
     }
+    // Chỉ xóa thumbnail nếu nó được upload MỚI cho VOD này (tức là không phải thumbnail kế thừa)
     if (
       b2UploadResponse?.thumbnail?.b2FileId &&
       b2UploadResponse?.thumbnail?.b2FileName
+      // Không cần check finalVodThumbnailInfo.b2FileName !== b2UploadResponse.thumbnail.b2FileName
+      // vì nếu finalVodThumbnailInfo có giá trị thì thumbnailFileStreamForUpload sẽ null,
+      // và b2UploadResponse.thumbnail sẽ không có giá trị.
     ) {
       try {
-        logger.info(
-          `Service: Dọn dẹp thumbnail ${b2UploadResponse.thumbnail.b2FileName} trên B2 do lỗi trong processRecordedFileToVOD.`
+        logger.warn(
+          // Changed to warn
+          `Service: Dọn dẹp thumbnail (mới upload) ${b2UploadResponse.thumbnail.b2FileName} trên B2 do lỗi trong processRecordedFileToVOD.`
         );
         await deleteFileFromB2(
           b2UploadResponse.thumbnail.b2FileName,
@@ -5648,31 +6701,30 @@ const processRecordedFileToVOD = async ({
         );
       } catch (deleteB2Error) {
         logger.error(
-          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail ${b2UploadResponse.thumbnail.b2FileName} trên B2:`,
+          `Service: Lỗi nghiêm trọng khi dọn dẹp thumbnail (mới upload) ${b2UploadResponse.thumbnail.b2FileName} trên B2:`,
           deleteB2Error
         );
       }
     }
     handleServiceError(error, "xử lý file ghi hình thành VOD");
   } finally {
-    // 9. Xóa file tạm trên server (FLV, MP4, Thumbnail)
-    const filesToDelete = [
-      originalFilePath,
-      mp4FilePath,
-      thumbnailFilePath,
-    ].filter(Boolean);
-    for (const filePath of filesToDelete) {
+    // 9. Xóa file tạm trên server (FLV, MP4, Thumbnail nếu được extract)
+    // tempFilesToDeleteOnError đã chứa các file cần xóa
+    logger.info("Service: Bắt đầu dọn dẹp file tạm trên server...");
+    for (const filePath of tempFilesToDeleteOnError) {
       try {
         if (filePath) {
-          // Check if filePath is not null
-          await fs.access(filePath); // Check if file exists before trying to delete
+          await fs.access(filePath);
           await fs.unlink(filePath);
           logger.info(`Successfully deleted temporary file: ${filePath}`);
         }
       } catch (e) {
-        // Nếu file không tồn tại (ví dụ, mp4FilePath chưa được tạo do lỗi convert) thì bỏ qua
         if (e.code !== "ENOENT") {
           logger.error(`Failed to delete temporary file ${filePath}:`, e);
+        } else {
+          logger.info(
+            `Temporary file ${filePath} not found for deletion (already deleted or never created).`
+          );
         }
       }
     }
@@ -5697,7 +6749,6 @@ const createVOD = async (vodData) => {
       categoryId: vodData.categoryId,
     });
 
-    // Kiểm tra các trường bắt buộc cơ bản
     if (
       !vodData.userId ||
       !vodData.title ||
@@ -5712,7 +6763,6 @@ const createVOD = async (vodData) => {
       );
     }
 
-    // Kiểm tra Category nếu categoryId được cung cấp
     if (vodData.categoryId) {
       const category = await Category.findByPk(vodData.categoryId);
       if (!category) {
@@ -5728,32 +6778,59 @@ const createVOD = async (vodData) => {
       title: vodData.title,
       description: vodData.description,
       videoUrl: vodData.videoUrl,
-      urlExpiresAt: new Date(vodData.urlExpiresAt), // Đảm bảo là Date object
+      urlExpiresAt: new Date(vodData.urlExpiresAt),
       b2FileId: vodData.b2FileId,
       b2FileName: vodData.b2FileName,
       durationSeconds: vodData.durationSeconds || 0,
-
-      // Các trường thumbnail mới, cho phép null nếu không có thumbnail
       thumbnailUrl: vodData.thumbnailUrl || null,
       thumbnailUrlExpiresAt: vodData.thumbnailUrlExpiresAt
         ? new Date(vodData.thumbnailUrlExpiresAt)
         : null,
       b2ThumbnailFileId: vodData.b2ThumbnailFileId || null,
       b2ThumbnailFileName: vodData.b2ThumbnailFileName || null,
-
-      // Các trường tùy chọn liên quan đến stream
       streamId: vodData.streamId || null,
       streamKey: vodData.streamKey || null,
       categoryId: vodData.categoryId || null,
     });
 
     logger.info(`VOD created successfully with ID: ${newVOD.id}`);
+
+    // Gửi thông báo cho followers
+    if (newVOD.userId) {
+      const actorUser = await User.findByPk(newVOD.userId, {
+        attributes: ["id", "username"],
+      });
+      if (actorUser) {
+        logger.info(
+          `New VOD created (ID: ${newVOD.id}), preparing to notify followers of user ${actorUser.username} (ID: ${actorUser.id})`
+        );
+        notificationService
+          .notifyFollowers(
+            actorUser, // actorUser (User object)
+            "new_vod", // actionType
+            newVOD, // entity (VOD object, có id và title)
+            (followerUsername, actorUsername, entityTitle) =>
+              `${actorUsername} has published a new VOD: ${
+                entityTitle || "New Video"
+              }!`
+          )
+          .catch((err) => {
+            logger.error(
+              `Failed to notify followers for new VOD ${newVOD.id} (user: ${actorUser.id}):`,
+              err
+            );
+          });
+      } else {
+        logger.warn(
+          `Cannot send new_vod notification for VOD ${newVOD.id} because creator user (ID: ${newVOD.userId}) not found.`
+        );
+      }
+    }
+
     return newVOD;
   } catch (error) {
-    // Bọc lỗi bằng handleServiceError để chuẩn hóa
-    // throw handleServiceError(error, "Failed to create VOD in service");
-    // Để đơn giản, tạm thời re-throw lỗi gốc để controller xử lý và log chi tiết hơn
     logger.error("Error in vodService.createVOD:", error);
+    // Giữ nguyên throw error để các hàm gọi (processRecordedFileToVOD, createVODFromUpload) có thể xử lý cleanup nếu cần
     throw error;
   }
 };
@@ -6180,13 +7257,29 @@ const createVODFromUpload = async ({
       b2FileId: b2Response.video.b2FileId,
       b2FileName: b2Response.video.b2FileName,
       durationSeconds: b2Response.video.durationSeconds,
-      thumbnailUrl: b2Response.thumbnail?.url,
-      thumbnailUrlExpiresAt: b2Response.thumbnail?.urlExpiresAt,
-      b2ThumbnailFileId: b2Response.thumbnail?.b2FileId,
-      b2ThumbnailFileName: b2Response.thumbnail?.b2FileName,
+      thumbnailUrl: null, // Default to null
+      thumbnailUrlExpiresAt: null,
+      b2ThumbnailFileId: null,
+      b2ThumbnailFileName: null,
       categoryId: categoryId,
     };
 
+    if (finalThumbnailMimeType && finalOriginalThumbnailFileName) {
+      vodToCreate.thumbnailUrl = await generatePresignedUrlForExistingFile(
+        finalOriginalThumbnailFileName,
+        parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
+          3600 * 24 * 7
+      );
+      vodToCreate.thumbnailUrlExpiresAt = new Date(Date.now() + 3600 * 1000);
+      vodToCreate.b2ThumbnailFileId = b2ThumbFileIdToDelete;
+      vodToCreate.b2ThumbnailFileName = b2ThumbFileNameToDelete;
+    }
+
+    logger.info("Creating VOD entry in database with data:", {
+      ...vodToCreate,
+      videoUrl: "HIDDEN",
+      thumbnailUrl: vodToCreate.thumbnailUrl ? "HIDDEN" : null,
+    });
     const newVOD = await createVOD(vodToCreate);
     logger.info(`Service: VOD đã được tạo trong DB với ID: ${newVOD.id}`);
     return newVOD;
@@ -6393,15 +7486,10 @@ import path from "path"; // Added for path manipulation
 import dotenv from "dotenv";
 import redisClient from "../lib/redis.js"; // Import Redis client
 import appEmitter from "../utils/appEvents.js"; // Import App Emitter
+import notificationService from "./notificationService.js"; // THÊM IMPORT
+import logger from "../utils/logger.js"; // Đảm bảo logger được import
 
 dotenv.config();
-
-const logger = {
-  // Basic logger
-  info: console.log,
-  error: console.error,
-  warn: console.warn,
-};
 
 const LIVE_VIEWER_COUNT_KEY_PREFIX = "stream:live_viewers:";
 const LIVE_VIEWER_TTL_SECONDS =
@@ -6606,11 +7694,11 @@ export const updateStreamInfoService = async (
     const stream = await Stream.findByPk(streamId);
 
     if (!stream) {
-      throw new AppError("Stream not found", 404);
+      throw new AppError("Stream không tìm thấy", 404);
     }
 
     if (stream.userId !== currentUserId) {
-      throw new AppError("User not authorized to update this stream", 403);
+      throw new AppError("Người dùng không có quyền cập nhật stream này", 403);
     }
 
     const {
@@ -6623,7 +7711,7 @@ export const updateStreamInfoService = async (
       categoryId,
     } = updateData;
 
-    // Lưu lại thông tin thumbnail cũ để xóa nếu upload thumbnail mới thành công
+    const oldStatus = stream.status;
     const oldB2ThumbnailFileId = stream.b2ThumbnailFileId;
     const oldB2ThumbnailFileName = stream.b2ThumbnailFileName;
     let newThumbnailB2Response = null;
@@ -6692,38 +7780,65 @@ export const updateStreamInfoService = async (
 
     // Cập nhật categoryId
     if (categoryId !== undefined) {
-      // Cho phép cả việc gán null
       if (categoryId === null) {
         stream.categoryId = null;
       } else {
         const category = await Category.findByPk(categoryId);
         if (!category) {
-          throw new AppError(`Category with ID ${categoryId} not found.`, 400);
+          throw new AppError(
+            `Category với ID ${categoryId} không tìm thấy.`,
+            400
+          );
         }
         stream.categoryId = categoryId;
       }
     }
 
-    if (status !== undefined && ["live", "ended"].includes(status)) {
-      // Logic cập nhật status, startTime, endTime tương tự như trước
-      // (đã có trong file của bạn, có thể copy/paste hoặc giữ nguyên nếu nó đúng)
-      const oldStatus = stream.status;
-      if (stream.status !== status) {
-        stream.status = status;
-        if (status === "live") {
-          if (oldStatus === "ended" || !stream.startTime) {
-            stream.startTime = new Date();
-            stream.endTime = null;
-          }
-        } else if (status === "ended") {
-          if (oldStatus === "live" && !stream.endTime) {
+    // Xử lý cập nhật status
+    if (status !== undefined && status !== oldStatus) {
+      if (status === "live") {
+        if (stream.endTime) {
+          // Nếu stream đã có endTime (đã kết thúc vĩnh viễn)
+          throw new AppError(
+            "Buổi phát trực tiếp này đã kết thúc vĩnh viễn. Để phát lại, vui lòng tạo một buổi phát mới.",
+            400
+          );
+        }
+        stream.status = "live";
+        // Giữ startTime cũ nếu stream đã từng live và startTime còn đó (ví dụ, đang 'ended' tạm thời mà chưa có endTime),
+        // hoặc set mới nếu stream chưa từng live hoặc startTime là null.
+        stream.startTime = stream.startTime || new Date();
+        stream.endTime = null;
+        // Việc reset viewerCount/Redis sẽ do markLive từ RTMP đảm nhiệm khi stream thực sự bắt đầu.
+      } else if (status === "ended") {
+        // Nếu user chủ động set là 'ended' qua API
+        if (oldStatus === "live") {
+          // Chỉ thực hiện nếu đang từ 'live' chuyển sang và chưa có endTime
+          stream.status = "ended";
+          stream.endTime = new Date(); // Set endTime mới
+          // Lưu ý: Hành động này từ API chỉ cập nhật DB.
+          // Các tác vụ dọn dẹp (Redis, emit event) nên được xử lý bởi `markEnded` khi RTMP ngắt kết nối.
+        } else {
+          // Nếu stream đang không phải 'live' (ví dụ, 'ended' sẵn rồi, hoặc trạng thái không xác định)
+          // và user muốn set là 'ended' -> đảm bảo nó là 'ended' và có endTime nếu chưa có.
+          stream.status = "ended";
+          if (!stream.endTime) {
             stream.endTime = new Date();
           }
         }
+      } else {
+        throw new AppError(
+          `Giá trị trạng thái '${status}' không hợp lệ. Chỉ chấp nhận 'live' hoặc 'ended'.`,
+          400
+        );
       }
-    } else if (status !== undefined) {
+    } else if (status === "live" && oldStatus === "live" && stream.endTime) {
+      // Trường hợp người dùng gửi status="live", stream trên DB cũng là "live"
+      // NHƯNG stream.endTime lại có giá trị. Đây là mâu thuẫn logic.
+      // Stream không thể vừa "live" vừa có "endTime".
+      // Nên ném lỗi để chỉ ra rằng stream này thực sự đã kết thúc.
       throw new AppError(
-        "Invalid status value. Must be 'live' or 'ended'.",
+        "Buổi phát trực tiếp này đã kết thúc (do có endTime). Không thể đặt lại thành 'live'. Vui lòng tạo buổi phát mới.",
         400
       );
     }
@@ -6941,23 +8056,88 @@ export const getStreamDetailsService = async (streamId) => {
  */
 export const markLive = async (streamKey) => {
   try {
+    const stream = await Stream.findOne({
+      where: { streamKey },
+      include: [{ model: User, as: "user", attributes: ["id", "username"] }], // Include User để lấy thông tin actor
+    });
+
+    if (!stream) {
+      logger.error(`markLive: Stream với key ${streamKey} không tồn tại.`);
+      throw new AppError(
+        `Stream với key ${streamKey} không tồn tại. Không thể bắt đầu buổi phát.`,
+        404
+      );
+    }
+
+    if (stream.endTime) {
+      logger.warn(
+        `markLive: Từ chối cố gắng tái sử dụng stream key ${streamKey} đã kết thúc.`
+      );
+      throw new AppError(
+        `Stream key ${streamKey} đã được sử dụng và đã kết thúc. Vui lòng tạo một stream mới để tiếp tục.`,
+        403
+      );
+    }
+
+    const oldStatus = stream.status;
+    const newStartTime = stream.startTime || new Date();
+
     const [updatedRows] = await Stream.update(
-      { status: "live", startTime: new Date(), endTime: null, viewerCount: 0 },
+      {
+        status: "live",
+        startTime: newStartTime,
+        endTime: null,
+        viewerCount: 0, // Reset viewer count in DB when going live
+      },
       { where: { streamKey } }
     );
+
     if (updatedRows > 0) {
       await resetLiveViewerCount(streamKey);
       logger.info(
         `Stream ${streamKey} marked as live. Viewer count reset in DB and Redis.`
       );
+
+      // Chỉ gửi thông báo nếu stream chuyển từ trạng thái không phải 'live' sang 'live'
+      if (oldStatus !== "live") {
+        // Gửi thông báo cho followers
+        if (stream.user) {
+          // stream.user đã được include
+          logger.info(
+            `Stream ${streamKey} is now live, preparing to notify followers of user ${stream.user.username} (ID: ${stream.user.id})`
+          );
+          notificationService
+            .notifyFollowers(
+              stream.user, // actorUser (User object)
+              "stream_started", // actionType
+              stream, // entity (Stream object, có id và title)
+              (followerUsername, actorUsername, entityTitle) =>
+                `${actorUsername} has started streaming: ${
+                  entityTitle || "Live Stream"
+                }!`
+            )
+            .catch((err) => {
+              // Bắt lỗi ở đây để việc gửi thông báo không làm crash luồng chính
+              logger.error(
+                `Failed to notify followers for stream ${streamKey} (user: ${stream.user.id}):`,
+                err
+              );
+            });
+        } else {
+          logger.warn(
+            `Cannot send stream_started notification for stream ${streamKey} because user info is missing.`
+          );
+        }
+      }
     } else {
       logger.warn(
-        `markLive: Stream with key ${streamKey} not found or no change needed.`
+        `markLive: Stream với key ${streamKey} không tìm thấy để cập nhật hoặc không có thay đổi cần thiết.`
       );
     }
   } catch (error) {
-    console.error(`Error in markLive for stream ${streamKey}:`, error);
-    throw new Error("Failed to mark stream as live: " + error.message);
+    logger.error(`Error in markLive for stream ${streamKey}:`, error);
+    if (error instanceof AppError) throw error;
+    throw new AppError("Failed to mark stream as live: " + error.message, 500);
   }
 };
 

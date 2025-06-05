@@ -17,10 +17,13 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@bull-board/api": "^6.9.6",
+    "@bull-board/express": "^6.9.6",
     "@gideo-llc/backblaze-b2-upload-any": "^0.1.4",
     "backblaze-b2": "^1.7.1",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.2.0",
+    "bullmq": "^5.53.2",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
@@ -41,6 +44,7 @@
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
+    "@faker-js/faker": "^9.8.0",
     "nodemon": "^3.1.10"
   }
 }

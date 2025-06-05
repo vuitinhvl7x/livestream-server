@@ -14,22 +14,24 @@ export const setIoInstance = (io) => {
 
 const notificationService = {
   createNotification: async (
-    userId,
-    type,
-    message,
-    relatedEntityId = null,
-    relatedEntityType = null,
-    creatorUsername = null // Thêm username của người tạo sự kiện (ví dụ: người follow)
+    userId, // Người nhận thông báo
+    type, // Loại thông báo: new_follower, stream_started, new_vod
+    message, // Nội dung thông báo
+    relatedEntityId = null, // ID của user (new_follower), stream (stream_started), vod (new_vod)
+    relatedEntityType = null, // "user", "stream", "vod"
+    creatorUsername = null, // Username của người tạo sự kiện (người follow, người stream, người upload VOD)
+    // Đối với new_follower, đây là username của người đã follow (actor).
+    // Đối với stream_started/new_vod, đây là username của người stream/upload VOD (actor).
+    actorUserId = null, // ID của người tạo ra hành động (actor)
+    entityTitle = null // Tiêu đề của stream/VOD, nếu có
   ) => {
     try {
-      const userExists = await User.findByPk(userId);
-      if (!userExists) {
-        // Không throw lỗi ở đây vì có thể là thông báo cho user không tồn tại (ít gặp)
-        // hoặc là service khác sẽ handle. Tuy nhiên, ghi log là quan trọng.
+      const recipientUser = await User.findByPk(userId);
+      if (!recipientUser) {
         logger.warn(
           `Attempted to create notification for non-existent user ID: ${userId}`
         );
-        // return null; // Hoặc throw AppError tùy theo yêu cầu nghiệp vụ
+        return { success: false, reason: "user_not_found" };
       }
 
       const notificationData = {
@@ -38,6 +40,8 @@ const notificationService = {
         message,
         relatedEntityId,
         relatedEntityType,
+        // actorUserId và entityTitle không trực tiếp lưu vào Notification model theo schema hiện tại
+        // Chúng sẽ được dùng để xây dựng payload cho socket
       };
 
       const notification = await Notification.create(notificationData);
@@ -47,33 +51,46 @@ const notificationService = {
 
       if (ioInstance) {
         const notificationRoom = `notification:${userId}`;
-        // Gửi thêm thông tin chi tiết hơn cho client nếu cần
+
         const payload = {
           ...notification.toJSON(),
-          // Ví dụ: thêm thông tin người tạo nếu là 'new_follower'
-          ...(type === "new_follower" &&
-            creatorUsername &&
-            relatedEntityId && {
-              actor: { id: relatedEntityId, username: creatorUsername },
-            }),
         };
+
+        // Thêm thông tin actor và entity vào payload dựa trên type
+        if (type === "new_follower" && creatorUsername && relatedEntityId) {
+          // relatedEntityId ở đây là ID của người đã follow (actor)
+          payload.actor = { id: relatedEntityId, username: creatorUsername };
+        } else if (type === "stream_started" || type === "new_vod") {
+          if (actorUserId && creatorUsername) {
+            // creatorUsername ở đây là username của actor
+            payload.actor = { id: actorUserId, username: creatorUsername };
+          }
+          if (relatedEntityId && entityTitle) {
+            payload.entity = { id: relatedEntityId, title: entityTitle };
+          }
+        }
+
         ioInstance.to(notificationRoom).emit("new_notification", payload);
-        logger.info(`Emitted 'new_notification' to room ${notificationRoom}`);
+        logger.info(
+          `Emitted 'new_notification' to room ${notificationRoom} with payload:`,
+          payload
+        );
       } else {
         logger.warn(
           "ioInstance not set in notificationService, cannot emit real-time notification."
         );
       }
-
-      // TODO: Cập nhật Redis (user:notifications:unread:${userId})
-      // await redisClient.incr(`user:notifications:unread:${userId}`);
-
-      return notification;
+      return { success: true, notification };
     } catch (error) {
-      logger.error(`Error in createNotification for user ${userId}:`, error);
-      // Không ném lỗi ở đây để không làm gián đoạn luồng gọi (ví dụ khi follow thành công nhưng notification lỗi)
-      // Service gọi hàm này nên tự xử lý.
-      return null; // Hoặc throw new AppError('Could not create notification', 500, error); tùy theo yêu cầu
+      logger.error(
+        `Error in createNotification for user ${userId}, type ${type}:`,
+        error
+      );
+      return {
+        success: false,
+        reason: "internal_server_error",
+        error: error.message,
+      };
     }
   },
 
@@ -276,7 +293,9 @@ const notificationService = {
           message,
           entity.id, // ID của Stream hoặc VOD
           relatedEntityType, // 'stream' hoặc 'vod'
-          actorUser.username // Username của người tạo sự kiện (người bắt đầu stream/tạo VOD)
+          actorUser.username, // Username của người tạo sự kiện (người bắt đầu stream/tạo VOD)
+          actorUser.id, // ID của người tạo ra hành động (actor)
+          entity.title // Tiêu đề của stream/VOD, nếu có
         );
       }
       logger.info(

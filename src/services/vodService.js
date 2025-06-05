@@ -20,6 +20,8 @@ import { Sequelize } from "sequelize";
 import redisClient from "../lib/redis.js";
 import notificationService from "./notificationService.js";
 import logger from "../utils/logger.js";
+import notificationQueue from "../queues/notificationQueue.js";
+import followService from "./followService.js";
 
 dotenv.config();
 
@@ -538,10 +540,43 @@ const processRecordedFileToVOD = async ({
       videoUrl: "HIDDEN",
       thumbnailUrl: vodData.thumbnailUrl ? "HIDDEN" : null,
     });
-    const newVOD = await createVOD(vodData);
-    logger.info(`VOD entry created with ID: ${newVOD.id}`);
+    const newVod = await createVOD(vodData);
+    logger.info(`Service: VOD đã được tạo trong DB với ID: ${newVod.id}`);
 
-    return newVOD;
+    // 7. Dọn dẹp file tạm (FLV, MP4, thumbnail nếu được extract mới)
+    // File FLV gốc (originalFilePath) thường sẽ được xóa bởi script gọi processRecordedFileToVOD
+    // (ví dụ: script hook của nginx-rtmp sau khi stream kết thúc và file đã được xử lý)
+    // Tuy nhiên, nếu nó được thêm vào tempFilesToDeleteOnError ở đầu, nó sẽ được xóa ở đây nếu không có lỗi nào khác.
+    // Không xóa originalFilePath ở đây nữa, để cho script ngoài quản lý.
+    // Chỉ xóa mp4FilePath và localThumbnailToUploadPath (nếu có)
+    if (mp4FilePath) {
+      fs.unlink(mp4FilePath).catch((err) =>
+        logger.warn(
+          `Failed to delete temporary MP4 file ${mp4FilePath}: ${err}`
+        )
+      );
+    }
+    if (localThumbnailToUploadPath) {
+      // Đã được thêm vào tempFilesToDeleteOnError nếu được tạo
+      // fs.unlink(localThumbnailToUploadPath).catch((err) => logger.warn(`Failed to delete temporary thumbnail file ${localThumbnailToUploadPath}: ${err}`));
+      // Không cần xóa lại ở đây vì nó đã có trong tempFilesToDeleteOnError và sẽ được xử lý ở khối catch nếu có lỗi trước đó,
+      // hoặc sẽ được xóa sau nếu thành công (logic này nên được xem lại)
+      // Hiện tại, ta sẽ xóa nó một cách tường minh nếu nó được tạo và không có lỗi gì nghiêm trọng trước đó.
+      // Quyết định: Sẽ xóa localThumbnailToUploadPath ở cuối nếu nó được tạo.
+      // Điều này đã được xử lý bởi logic `tempFilesToDeleteOnError` và khối catch.
+      // Nếu không có lỗi, chúng ta vẫn nên dọn dẹp.
+      // File thumbnail đã được upload, file tạm trên disk không cần nữa.
+      fs.unlink(localThumbnailToUploadPath).catch((err) =>
+        logger.warn(
+          `Failed to delete temporary extracted thumbnail file ${localThumbnailToUploadPath}: ${err}`
+        )
+      );
+    }
+
+    logger.info(
+      `Service: Xử lý VOD từ file ghi ${originalFileName} thành công. VOD ID: ${newVod.id}`
+    );
+    return newVod;
   } catch (error) {
     logger.error(
       `Error in processRecordedFileToVOD for streamKey ${streamKey}:`,
@@ -688,24 +723,63 @@ const createVOD = async (vodData) => {
       });
       if (actorUser) {
         logger.info(
-          `New VOD created (ID: ${newVOD.id}), preparing to notify followers of user ${actorUser.username} (ID: ${actorUser.id})`
+          `New VOD created (ID: ${newVOD.id}), preparing to notify followers of user ${actorUser.username} (ID: ${actorUser.id}) via BullMQ`
         );
-        notificationService
-          .notifyFollowers(
-            actorUser, // actorUser (User object)
-            "new_vod", // actionType
-            newVOD, // entity (VOD object, có id và title)
-            (followerUsername, actorUsername, entityTitle) =>
-              `${actorUsername} has published a new VOD: ${
-                entityTitle || "New Video"
-              }!`
-          )
-          .catch((err) => {
-            logger.error(
-              `Failed to notify followers for new VOD ${newVOD.id} (user: ${actorUser.id}):`,
-              err
+        try {
+          const allFollows = await followService.getFollowersInternal(
+            actorUser.id
+          );
+          const followers = allFollows
+            .map((follow) => follow.follower) // Lấy object follower từ mỗi mục follow
+            .filter((follower) => follower && follower.id && follower.username); // Lọc những follower hợp lệ
+
+          if (followers.length > 0) {
+            const batchSize = 10; // Or your preferred batch size
+            for (let i = 0; i < followers.length; i += batchSize) {
+              const batch = followers.slice(i, i + batchSize);
+              const jobData = {
+                actionType: "new_vod",
+                actorUser: {
+                  // Consistent with streamService
+                  id: actorUser.id,
+                  username: actorUser.username,
+                },
+                entity: { id: newVOD.id, title: newVOD.title },
+                followers: batch.map((f) => ({
+                  // Send only necessary follower info
+                  id: f.id,
+                  username: f.username,
+                })),
+                messageTemplate: `${
+                  actorUser.username
+                } has published a new VOD: ${newVOD.title || "New Video"}!`,
+              };
+              await notificationQueue.add(
+                "process-notification-batch",
+                jobData
+              );
+              logger.info(
+                `Added new_vod notification job to queue for VOD ${
+                  newVOD.id
+                }, user ${actorUser.id}, batch ${
+                  Math.floor(i / batchSize) + 1
+                }/${Math.ceil(followers.length / batchSize)}`
+              );
+            }
+            logger.info(
+              `Successfully queued all new_vod notification jobs for VOD ${newVOD.id}, user ${actorUser.id}. Total followers: ${followers.length}`
             );
-          });
+          } else {
+            logger.info(
+              `User ${actorUser.username} (ID: ${actorUser.id}) has no followers to notify for new VOD ${newVOD.id}.`
+            );
+          }
+        } catch (notifyError) {
+          logger.error(
+            `Failed to get followers or add notification job for new VOD ${newVOD.id} (user: ${actorUser.id}):`,
+            notifyError
+          );
+        }
       } else {
         logger.warn(
           `Cannot send new_vod notification for VOD ${newVOD.id} because creator user (ID: ${newVOD.userId}) not found.`
@@ -1150,15 +1224,22 @@ const createVODFromUpload = async ({
       categoryId: categoryId,
     };
 
-    if (finalThumbnailMimeType && finalOriginalThumbnailFileName) {
-      vodToCreate.thumbnailUrl = await generatePresignedUrlForExistingFile(
-        finalOriginalThumbnailFileName,
-        parseInt(process.env.B2_PRESIGNED_URL_DURATION_SECONDS_IMAGES) ||
-          3600 * 24 * 7
+    if (b2Response.thumbnail && b2Response.thumbnail.url) {
+      vodToCreate.thumbnailUrl = b2Response.thumbnail.url;
+      vodToCreate.thumbnailUrlExpiresAt = b2Response.thumbnail.urlExpiresAt;
+      vodToCreate.b2ThumbnailFileId = b2Response.thumbnail.b2FileId;
+      vodToCreate.b2ThumbnailFileName = b2Response.thumbnail.b2FileName;
+    } else if (thumbnailStream) {
+      // Nếu thumbnail được xử lý (auto-generated hoặc provided) và upload thành công
+      // nhưng không có trong b2Response.thumbnail (ví dụ: lỗi logic ở uploadToB2AndGetPresignedUrl)
+      // thì cần đảm bảo thông tin này được lưu nếu file thực sự đã lên B2.
+      // Tuy nhiên, uploadToB2AndGetPresignedUrl nên trả về thông tin thumbnail nếu nó xử lý thumbnail.
+      // Đoạn này giả định rằng nếu thumbnailStream tồn tại, nó ĐÃ được upload và thông tin có trong b2Response.thumbnail
+      // Nếu không, cần xem lại logic của uploadToB2AndGetPresignedUrl.
+      // Hiện tại, để an toàn, nếu b2Response.thumbnail không có, ta không set các trường thumbnailUrl...
+      logger.warn(
+        `Service: Thumbnail stream existed but no thumbnail info in B2 response for VOD title: ${title}. Thumbnail might not have been uploaded or processed correctly.`
       );
-      vodToCreate.thumbnailUrlExpiresAt = new Date(Date.now() + 3600 * 1000);
-      vodToCreate.b2ThumbnailFileId = b2ThumbFileIdToDelete;
-      vodToCreate.b2ThumbnailFileName = b2ThumbFileNameToDelete;
     }
 
     logger.info("Creating VOD entry in database with data:", {
@@ -1168,6 +1249,7 @@ const createVODFromUpload = async ({
     });
     const newVOD = await createVOD(vodToCreate);
     logger.info(`Service: VOD đã được tạo trong DB với ID: ${newVOD.id}`);
+
     return newVOD;
   } catch (error) {
     logger.error("Service: Lỗi trong createVODFromUpload:", error);
