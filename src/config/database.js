@@ -39,7 +39,7 @@ const sequelize = new Sequelize(
   {
     host: process.env.DB_HOST,
     dialect: config.dialect,
-    logging: (msg) => logger.info(msg),
+    logging: false,
     pool: {
       max: 5,
       min: 0,

@@ -13,6 +13,7 @@ import chatRoutes from "./routes/chatRoutes.js";
 import vodRoutes from "./routes/vodRoutes.js";
 import initializeSocketHandlers from "./socketHandlers.js";
 import { setIoInstance as setNotificationServiceIo } from "./services/notificationService.js";
+import morgan from "morgan";
 // Import category routes
 import categoryRoutes from "./routes/categoryRoutes.js";
 import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
@@ -58,6 +59,7 @@ createBullBoard({
 app.use("/admin/queues", serverAdapter.getRouter());
 
 // Middleware
+app.use(morgan("dev"));
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "*",
