@@ -499,8 +499,11 @@ const findCategoryByIdOrSlug = async (identifier, includeB2Details = false) => {
         ],
       };
   let category;
-  if (!isNaN(parseInt(identifier))) {
-    category = await Category.findByPk(parseInt(identifier), { attributes });
+  // Use a stricter check to ensure the entire string is a number.
+  if (/^\d+$/.test(identifier)) {
+    category = await Category.findByPk(parseInt(identifier, 10), {
+      attributes,
+    });
   } else {
     category = await Category.findOne({
       where: { slug: identifier },
