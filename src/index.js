@@ -1,7 +1,9 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
-import dotenv from "dotenv";
 import http from "http";
 import { Server } from "socket.io";
 import sequelize from "./config/database.js";
@@ -29,8 +31,6 @@ import { BullMQAdapter } from "@bull-board/api/bullMQAdapter.js";
 import { ExpressAdapter } from "@bull-board/express";
 // Import your queue
 import notificationQueue from "./queues/notificationQueue.js";
-
-dotenv.config();
 
 const app = express();
 const server = http.createServer(app);

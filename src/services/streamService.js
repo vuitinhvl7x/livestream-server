@@ -466,8 +466,22 @@ export const getStreamsListService = async (queryParams) => {
         if (plainStream.status === "live" && plainStream.streamKey) {
           const liveViewers = await getLiveViewerCount(plainStream.streamKey);
           plainStream.currentViewerCount = liveViewers;
+          // Thêm playback URLs
+          const mediaServerUrl = process.env.MEDIA_SERVER_URL;
+          if (mediaServerUrl) {
+            plainStream.playbackUrls = {
+              hls: `${mediaServerUrl}/hls/${plainStream.streamKey}.m3u8`,
+              dash: `${mediaServerUrl}/dash/${plainStream.streamKey}.mpd`,
+            };
+          } else {
+            logger.warn(
+              "MEDIA_SERVER_URL environment variable is not set. Cannot generate playback URLs."
+            );
+            plainStream.playbackUrls = null;
+          }
         } else {
           plainStream.currentViewerCount = plainStream.viewerCount; // For ended streams, show final DB count
+          plainStream.playbackUrls = null;
         }
         return plainStream;
       })
@@ -566,8 +580,23 @@ export const getStreamDetailsService = async (streamId) => {
     if (plainStream.status === "live" && plainStream.streamKey) {
       const liveViewers = await getLiveViewerCount(plainStream.streamKey);
       plainStream.currentViewerCount = liveViewers;
+
+      // Construct playback URLs
+      const mediaServerUrl = process.env.MEDIA_SERVER_URL;
+      if (mediaServerUrl) {
+        plainStream.playbackUrls = {
+          hls: `${mediaServerUrl}/hls/${plainStream.streamKey}.m3u8`,
+          dash: `${mediaServerUrl}/dash/${plainStream.streamKey}.mpd`,
+        };
+      } else {
+        logger.warn(
+          "MEDIA_SERVER_URL environment variable is not set. Cannot generate playback URLs."
+        );
+        plainStream.playbackUrls = null;
+      }
     } else {
       plainStream.currentViewerCount = plainStream.viewerCount;
+      plainStream.playbackUrls = null; // Not live, no playback URLs
     }
 
     return plainStream; // Returns plain object with potentially refreshed thumbnail and live viewer count
@@ -880,8 +909,22 @@ export const searchStreamsService = async ({
         if (plainStream.status === "live" && plainStream.streamKey) {
           const liveViewers = await getLiveViewerCount(plainStream.streamKey);
           plainStream.currentViewerCount = liveViewers;
+          // Thêm playback URLs
+          const mediaServerUrl = process.env.MEDIA_SERVER_URL;
+          if (mediaServerUrl) {
+            plainStream.playbackUrls = {
+              hls: `${mediaServerUrl}/hls/${plainStream.streamKey}.m3u8`,
+              dash: `${mediaServerUrl}/dash/${plainStream.streamKey}.mpd`,
+            };
+          } else {
+            logger.warn(
+              "MEDIA_SERVER_URL environment variable is not set. Cannot generate playback URLs."
+            );
+            plainStream.playbackUrls = null;
+          }
         } else {
           plainStream.currentViewerCount = plainStream.viewerCount;
+          plainStream.playbackUrls = null;
         }
         return plainStream;
       })

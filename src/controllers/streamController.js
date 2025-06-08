@@ -229,6 +229,8 @@ export const getStreams = async (req, res) => {
         startTime: stream.startTime,
         endTime: stream.endTime,
         viewerCount: stream.viewerCount,
+        currentViewerCount: stream.currentViewerCount,
+        playbackUrls: stream.playbackUrls,
         thumbnailUrl: stream.thumbnailUrl,
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
         user: stream.user,
@@ -275,6 +277,8 @@ export const getStreamById = async (req, res, next) => {
         startTime: stream.startTime,
         endTime: stream.endTime,
         viewerCount: stream.viewerCount,
+        currentViewerCount: stream.currentViewerCount,
+        playbackUrls: stream.playbackUrls,
         thumbnailUrl: stream.thumbnailUrl,
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
         // streamKey: stream.streamKey, // TODO: Remove this field from response
