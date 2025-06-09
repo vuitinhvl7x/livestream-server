@@ -208,12 +208,13 @@ export const getStreams = async (req, res) => {
   }
 
   try {
-    const { status, page, limit, categoryId } = req.query;
+    const { status, page, limit, categoryId, userId } = req.query;
     const result = await getStreamsListService({
       status,
       page,
       limit,
       categoryId,
+      userId,
     });
 
     res.status(200).json({

@@ -430,13 +430,13 @@ export const updateStreamInfoService = async (
 
 /**
  * Lấy danh sách các stream.
- * @param {object} queryParams - Tham số query (status, page, limit, categoryId).
+ * @param {object} queryParams - Tham số query (status, page, limit, categoryId, userId).
  * @returns {Promise<object>} Danh sách stream và thông tin phân trang.
  * @throws {Error} Nếu có lỗi xảy ra.
  */
 export const getStreamsListService = async (queryParams) => {
   try {
-    const { status, page = 1, limit = 10, categoryId } = queryParams;
+    const { status, page = 1, limit = 10, categoryId, userId } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
     const whereClause = {};
@@ -446,6 +446,10 @@ export const getStreamsListService = async (queryParams) => {
     if (categoryId) {
       // Lọc theo categoryId
       whereClause.categoryId = categoryId;
+    }
+    if (userId) {
+      // Lọc theo userId
+      whereClause.userId = userId;
     }
 
     const { count, rows } = await Stream.findAndCountAll({

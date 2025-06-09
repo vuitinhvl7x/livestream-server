@@ -71,6 +71,11 @@ export const validateGetStreams = [
     .isInt({ gt: 0 })
     .withMessage("Category ID must be a positive integer")
     .toInt(),
+  query("userId")
+    .optional()
+    .isInt({ gt: 0 })
+    .withMessage("User ID must be a positive integer")
+    .toInt(),
 ];
 
 export const validateGetStreamById = [
