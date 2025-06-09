@@ -182,7 +182,11 @@ const initializeSocketHandlers = (io) => {
           // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công
         }
 
-        const currentViewers = await incrementLiveViewerCount(streamKey);
+        const userId = socket.user.id;
+        const currentViewers = await incrementLiveViewerCount(
+          streamKey,
+          userId
+        );
         if (currentViewers !== null) {
           // Phát tới phòng có tên là roomId (streamId)
           io.to(roomId).emit("viewer_count_updated", {
@@ -283,7 +287,11 @@ const initializeSocketHandlers = (io) => {
             `User ${socket.user.username} (${socket.id}) left room (streamId): ${roomId} (was mapped to streamKey: ${streamKey})`
           );
 
-          const currentViewers = await decrementLiveViewerCount(streamKey);
+          const userId = socket.user.id;
+          const currentViewers = await decrementLiveViewerCount(
+            streamKey,
+            userId
+          );
           if (currentViewers !== null) {
             io.to(roomId).emit("viewer_count_updated", {
               streamId: roomId,
@@ -306,13 +314,21 @@ const initializeSocketHandlers = (io) => {
       logger.info(
         `User disconnected: ${socket.id}, UserInfo: ${socket.user?.username}. Cleaning up joined rooms.`
       );
-      if (socket.joinedStreamData && socket.joinedStreamData.size > 0) {
+      if (
+        socket.user &&
+        socket.joinedStreamData &&
+        socket.joinedStreamData.size > 0
+      ) {
+        const userId = socket.user.id;
         for (const [roomId, streamKey] of socket.joinedStreamData.entries()) {
           try {
             logger.info(
               `Processing disconnect for user ${socket.user?.username} from room (streamId): ${roomId} (mapped to streamKey: ${streamKey})`
             );
-            const currentViewers = await decrementLiveViewerCount(streamKey);
+            const currentViewers = await decrementLiveViewerCount(
+              streamKey,
+              userId
+            );
             if (currentViewers !== null) {
               // Vẫn phát tới phòng dựa trên roomId (streamId)
               io.to(roomId).emit("viewer_count_updated", {

@@ -20,7 +20,7 @@ import followService from "./followService.js"; // Thêm import cho followServic
 
 dotenv.config();
 
-const LIVE_VIEWER_COUNT_KEY_PREFIX = "stream:live_viewers:";
+const LIVE_VIEWER_HASH_KEY_PREFIX = "stream:viewer_connections:";
 const LIVE_VIEWER_TTL_SECONDS =
   parseInt(process.env.REDIS_STREAM_VIEWER_TTL_SECONDS) || 60 * 60 * 2; // 2 hours default
 
@@ -943,9 +943,9 @@ export const searchStreamsService = async ({
 };
 
 /**
- * Lấy số người xem hiện tại của một stream từ Redis.
+ * Lấy số người xem duy nhất hiện tại của một stream từ Redis Hash.
  * @param {string} streamKey - Khóa của stream.
- * @returns {Promise<number>} Số người xem hiện tại.
+ * @returns {Promise<number>} Số người xem duy nhất hiện tại.
  */
 export const getLiveViewerCount = async (streamKey) => {
   if (!streamKey) return 0;
@@ -957,10 +957,10 @@ export const getLiveViewerCount = async (streamKey) => {
     return 0;
   }
   try {
-    const countStr = await redisClient.get(
-      `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`
-    );
-    return countStr ? parseInt(countStr, 10) : 0;
+    const key = `${LIVE_VIEWER_HASH_KEY_PREFIX}${streamKey}`;
+    // HLEN đếm số lượng field (user duy nhất) trong hash.
+    const count = await redisClient.hlen(key);
+    return count;
   } catch (error) {
     logger.error(
       `Error getting live viewer count for stream ${streamKey} from Redis:`,
@@ -971,12 +971,13 @@ export const getLiveViewerCount = async (streamKey) => {
 };
 
 /**
- * Tăng số người xem hiện tại của một stream trong Redis.
+ * Ghi nhận một kết nối mới từ user, và trả về tổng số user duy nhất.
  * @param {string} streamKey - Khóa của stream.
- * @returns {Promise<number|null>} Số người xem mới, hoặc null nếu lỗi nghiêm trọng.
+ * @param {string|number} userId - ID của người dùng kết nối.
+ * @returns {Promise<number|null>} Số người xem duy nhất mới, hoặc null nếu lỗi.
  */
-export const incrementLiveViewerCount = async (streamKey) => {
-  if (!streamKey) return null;
+export const incrementLiveViewerCount = async (streamKey, userId) => {
+  if (!streamKey || !userId) return null;
   await ensureRedisConnected();
   if (redisClient.status !== "ready") {
     logger.warn(
@@ -984,14 +985,18 @@ export const incrementLiveViewerCount = async (streamKey) => {
     );
     return null;
   }
-  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  const key = `${LIVE_VIEWER_HASH_KEY_PREFIX}${streamKey}`;
   try {
-    const newCount = await redisClient.incr(key);
+    // Tăng số kết nối cho userId này lên 1
+    await redisClient.hincrby(key, userId.toString(), 1);
+    // Lấy tổng số user duy nhất
+    const uniqueViewerCount = await redisClient.hlen(key);
+    // Làm mới TTL cho cả hash
     await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
     logger.info(
-      `Incremented live viewer count for stream ${streamKey} to ${newCount}`
+      `User ${userId} connection added for stream ${streamKey}. Total unique viewers: ${uniqueViewerCount}`
     );
-    return newCount;
+    return uniqueViewerCount;
   } catch (error) {
     logger.error(
       `Error incrementing live viewer count for stream ${streamKey} in Redis:`,
@@ -1002,12 +1007,13 @@ export const incrementLiveViewerCount = async (streamKey) => {
 };
 
 /**
- * Giảm số người xem hiện tại của một stream trong Redis.
+ * Ghi nhận một kết nối bị ngắt từ user, và trả về tổng số user duy nhất còn lại.
  * @param {string} streamKey - Khóa của stream.
- * @returns {Promise<number|null>} Số người xem mới, hoặc null nếu lỗi nghiêm trọng.
+ * @param {string|number} userId - ID của người dùng ngắt kết nối.
+ * @returns {Promise<number|null>} Số người xem duy nhất mới, hoặc null nếu lỗi.
  */
-export const decrementLiveViewerCount = async (streamKey) => {
-  if (!streamKey) return null;
+export const decrementLiveViewerCount = async (streamKey, userId) => {
+  if (!streamKey || !userId) return null;
   await ensureRedisConnected();
   if (redisClient.status !== "ready") {
     logger.warn(
@@ -1015,43 +1021,60 @@ export const decrementLiveViewerCount = async (streamKey) => {
     );
     return null;
   }
-  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  const key = `${LIVE_VIEWER_HASH_KEY_PREFIX}${streamKey}`;
+  const userIdStr = userId.toString();
+
   try {
-    const currentCount = await redisClient.decr(key);
-    if (currentCount < 0) {
-      await redisClient.set(key, "0"); // Ensure count doesn't go negative
+    // Giảm số kết nối cho userId này đi 1
+    const userConnectionCount = await redisClient.hincrby(key, userIdStr, -1);
+
+    // Nếu đây là kết nối cuối cùng của user, xóa họ khỏi hash
+    if (userConnectionCount <= 0) {
+      await redisClient.hdel(key, userIdStr);
       logger.info(
-        `Live viewer count for stream ${streamKey} was negative after DECR, reset to 0.`
+        `User ${userIdStr}'s last connection removed for stream ${streamKey}.`
       );
-      await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS); // Set TTL again if key was reset
-      return 0;
     }
-    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS); // Refresh TTL
+
+    // Lấy số user duy nhất còn lại
+    const uniqueViewerCount = await redisClient.hlen(key);
+
+    // Nếu vẫn còn người xem, làm mới TTL. Nếu không, xóa key để dọn dẹp.
+    if (uniqueViewerCount > 0) {
+      await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
+    } else {
+      // Không còn ai xem, xóa hash này đi cho sạch sẽ.
+      await redisClient.del(key);
+      logger.info(
+        `Viewer count hash for stream ${streamKey} deleted as it is empty.`
+      );
+    }
+
     logger.info(
-      `Decremented live viewer count for stream ${streamKey} to ${currentCount}`
+      `User ${userId} connection removed for stream ${streamKey}. Total unique viewers: ${uniqueViewerCount}`
     );
-    return currentCount;
+    return uniqueViewerCount;
   } catch (error) {
     logger.error(
       `Error decrementing live viewer count for stream ${streamKey} in Redis:`,
       error
     );
-    // Attempt to get current value if decrement fails, or handle error
+    // Trong trường hợp lỗi, thử lấy lại số đếm hiện tại để tránh trả về null
     try {
-      const val = await redisClient.get(key); // Get might return null if key disappeared
-      return val ? Math.max(0, parseInt(val, 10)) : 0; // Ensure it's not negative
+      const count = await redisClient.hlen(key);
+      return count >= 0 ? count : 0;
     } catch (getErr) {
       logger.error(
         `Error fetching count after decrement error for ${streamKey}:`,
         getErr
       );
-      return 0; // Fallback to 0
+      return 0; // Fallback
     }
   }
 };
 
 /**
- * Reset số người xem hiện tại của một stream trong Redis về 0.
+ * Xóa hash đếm người xem của một stream trong Redis.
  * @param {string} streamKey - Khóa của stream.
  * @returns {Promise<void>}
  */
@@ -1064,14 +1087,13 @@ export const resetLiveViewerCount = async (streamKey) => {
     );
     return;
   }
-  const key = `${LIVE_VIEWER_COUNT_KEY_PREFIX}${streamKey}`;
+  const key = `${LIVE_VIEWER_HASH_KEY_PREFIX}${streamKey}`;
   try {
-    await redisClient.set(key, "0");
-    await redisClient.expire(key, LIVE_VIEWER_TTL_SECONDS);
-    logger.info(`Reset live viewer count for stream ${streamKey} to 0.`);
+    await redisClient.del(key);
+    logger.info(`Reset live viewer count hash for stream ${streamKey}.`);
   } catch (error) {
     logger.error(
-      `Error resetting live viewer count for stream ${streamKey} in Redis:`,
+      `Error resetting live viewer count hash for stream ${streamKey} in Redis:`,
       error
     );
   }
