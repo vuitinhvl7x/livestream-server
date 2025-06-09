@@ -6,6 +6,7 @@ import {
   getUserProfileById,
   getAllUsers,
   logoutUser,
+  getUserPublicProfileByUsername,
 } from "../services/userService.js";
 
 export const register = async (req, res) => {
@@ -141,6 +142,17 @@ export const getAllUsersController = async (req, res) => {
   try {
     const users = await getAllUsers();
     res.status(200).json(users);
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message });
+  }
+};
+
+export const getUserPublicProfile = async (req, res) => {
+  try {
+    const { username } = req.params;
+    const userProfile = await getUserPublicProfileByUsername(username);
+    res.status(200).json(userProfile);
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ error: error.message });

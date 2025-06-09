@@ -13,6 +13,8 @@ import path from "path";
 import dotenv from "dotenv";
 import { TokenBlacklist } from "../models/index.js";
 import logger from "../utils/logger.js";
+import { Follow, Stream, VOD } from "../models/index.js";
+import { sequelize } from "../models/index.js";
 
 dotenv.config();
 
@@ -344,5 +346,85 @@ export const logoutUser = async (token, tokenPayload) => {
     }
     logger.error(`Error blacklisting token: ${error.message}`);
     throw new AppError("Could not log out user.", 500);
+  }
+};
+
+export const getUserPublicProfileByUsername = async (username) => {
+  try {
+    const user = await User.findOne({
+      where: { username },
+      attributes: [
+        "id",
+        "username",
+        "displayName",
+        "avatarUrl",
+        "bio",
+        "createdAt",
+        // We can get follower count via a subquery for efficiency
+        [
+          sequelize.literal(
+            `(SELECT COUNT(*) FROM "Follows" WHERE "Follows"."followingId" = "User"."id")`
+          ),
+          "followerCount",
+        ],
+      ],
+      include: [
+        {
+          model: Stream,
+          as: "streams",
+          where: { status: "live" },
+          required: false,
+          attributes: [
+            "id",
+            "title",
+            "status",
+            "viewerCount",
+            "thumbnailUrl",
+            "startTime",
+          ],
+        },
+        {
+          model: VOD,
+          as: "vods",
+          required: false,
+          attributes: [
+            "id",
+            "title",
+            "description",
+            "videoUrl",
+            "thumbnailUrl",
+            "durationSeconds",
+            "viewCount",
+            "createdAt",
+          ],
+          limit: 10,
+          order: [["createdAt", "DESC"]],
+        },
+      ],
+    });
+
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    // Rename 'streams' to 'liveStream' for clarity, as we only fetch the live one.
+    const userProfile = user.toJSON();
+    userProfile.liveStream =
+      userProfile.streams && userProfile.streams.length > 0
+        ? userProfile.streams[0]
+        : null;
+    delete userProfile.streams;
+
+    return userProfile;
+  } catch (error) {
+    logger.error(
+      `Service: Error in getUserPublicProfile for user ${username}:`,
+      error
+    );
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not retrieve user profile: ${error.message}`,
+      error.statusCode || 500
+    );
   }
 };

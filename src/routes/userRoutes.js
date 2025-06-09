@@ -11,6 +11,7 @@ import {
   updateProfile,
   getMyProfile,
   getAllUsersController,
+  getUserPublicProfile,
 } from "../controllers/userController.js";
 import authenticateToken from "../middlewares/authMiddleware.js";
 import upload from "../middlewares/uploadMiddleware.js";
@@ -20,6 +21,9 @@ const router = express.Router();
 // Public routes
 router.post("/register", validateUserRegistration, register);
 router.post("/login", validateUserLogin, login);
+
+// Route to get a user's public profile
+router.get("/profile/:username", getUserPublicProfile);
 
 // Protected routes (require authentication)
 router.post("/logout", authenticateToken, logout);
