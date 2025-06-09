@@ -360,7 +360,6 @@ export const getUserPublicProfileByUsername = async (username) => {
         "avatarUrl",
         "bio",
         "createdAt",
-        // We can get follower count via a subquery for efficiency
         [
           sequelize.literal(
             `(SELECT COUNT(*) FROM "Follows" WHERE "Follows"."followingId" = "User"."id")`
@@ -368,54 +367,14 @@ export const getUserPublicProfileByUsername = async (username) => {
           "followerCount",
         ],
       ],
-      include: [
-        {
-          model: Stream,
-          as: "streams",
-          where: { status: "live" },
-          required: false,
-          attributes: [
-            "id",
-            "title",
-            "status",
-            "viewerCount",
-            "thumbnailUrl",
-            "startTime",
-          ],
-        },
-        {
-          model: VOD,
-          as: "vods",
-          required: false,
-          attributes: [
-            "id",
-            "title",
-            "description",
-            "videoUrl",
-            "thumbnailUrl",
-            "durationSeconds",
-            "viewCount",
-            "createdAt",
-          ],
-          limit: 10,
-          order: [["createdAt", "DESC"]],
-        },
-      ],
     });
 
     if (!user) {
       throw new AppError("User not found", 404);
     }
 
-    // Rename 'streams' to 'liveStream' for clarity, as we only fetch the live one.
-    const userProfile = user.toJSON();
-    userProfile.liveStream =
-      userProfile.streams && userProfile.streams.length > 0
-        ? userProfile.streams[0]
-        : null;
-    delete userProfile.streams;
-
-    return userProfile;
+    // The logic to refresh the avatar URL can be added here if needed.
+    return user;
   } catch (error) {
     logger.error(
       `Service: Error in getUserPublicProfile for user ${username}:`,
