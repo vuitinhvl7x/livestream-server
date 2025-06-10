@@ -142,4 +142,3 @@ config.json
 .cursor
 roadmap.md
 nginx.conf
-api*.md

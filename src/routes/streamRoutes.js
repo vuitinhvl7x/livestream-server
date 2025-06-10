@@ -5,6 +5,7 @@ import {
   getStreams,
   getStreamById,
   searchStreams,
+  getVodByStreamId,
 } from "../controllers/streamController.js";
 import authenticateToken from "../middlewares/authMiddleware.js";
 import upload from "../middlewares/uploadMiddleware.js";
@@ -14,6 +15,7 @@ import {
   validateGetStreams,
   validateGetStreamById,
   validateStreamSearchParams,
+  validateGetVodByStreamId,
 } from "../validators/streamValidators.js";
 
 const router = express.Router();
@@ -48,5 +50,8 @@ router.get("/search", validateStreamSearchParams, searchStreams);
 
 // GET /api/streams/:streamId - Lấy chi tiết một stream (không yêu cầu xác thực cho route này)
 router.get("/:streamId", validateGetStreamById, getStreamById);
+
+// GET /api/streams/:streamId/vod - Lấy VOD từ một stream
+router.get("/:streamId/vod", validateGetVodByStreamId, getVodByStreamId);
 
 export default router;

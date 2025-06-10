@@ -85,6 +85,13 @@ export const validateGetStreamById = [
     .toInt(),
 ];
 
+export const validateGetVodByStreamId = [
+  param("streamId")
+    .isInt({ gt: 0 })
+    .withMessage("Stream ID must be a positive integer")
+    .toInt(),
+];
+
 export const validateStreamSearchParams = [
   query("tag")
     .optional({ checkFalsy: true })

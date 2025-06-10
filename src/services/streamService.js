@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { Stream, User, Category } from "../models/index.js";
+import { Stream, User, Category, VOD } from "../models/index.js";
 import { Op, Sequelize } from "sequelize"; // For more complex queries if needed later
 import { AppError, handleServiceError } from "../utils/errorHandler.js"; // Added for error handling
 import {
@@ -1132,5 +1132,38 @@ export const getStreamKeyAndStatusById = async (streamId) => {
       error
     );
     return null;
+  }
+};
+
+/**
+ * Lấy VOD bằng streamId.
+ * @param {number} streamId - ID của stream.
+ * @returns {Promise<VOD|null>} Đối tượng VOD hoặc null nếu không tìm thấy.
+ */
+export const getVodByStreamIdService = async (streamId) => {
+  try {
+    const vod = await VOD.findOne({
+      where: { streamId: streamId },
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        { model: Category, as: "category", attributes: ["id", "name", "slug"] },
+      ],
+    });
+
+    if (!vod) {
+      return null;
+    }
+
+    // TODO: Cân nhắc việc làm mới URL của VOD ở đây nếu cần
+    // Ví dụ: kiểm tra `vod.urlExpiresAt` và gọi `generatePresignedUrlForExistingFile`
+
+    return vod;
+  } catch (error) {
+    logger.error(`Lỗi khi lấy VOD cho stream ID ${streamId}:`, error);
+    throw new AppError(
+      "Không thể lấy thông tin VOD từ stream.",
+      500,
+      "VOD_FETCH_ERROR"
+    );
   }
 };
