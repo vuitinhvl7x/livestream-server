@@ -5,6 +5,7 @@ import {
   getCategoriesService,
   getCategoryDetailsService,
   searchCategoriesByTagService,
+  searchCategoriesByNameService,
 } from "../services/categoryService.js";
 import { validationResult, matchedData } from "express-validator";
 import { AppError } from "../utils/errorHandler.js";
@@ -196,6 +197,54 @@ export const searchCategoriesByTag = async (req, res, next) => {
     });
   } catch (error) {
     logger.error("Controller: Error searching categories by tag:", error);
+    next(error);
+  }
+};
+
+export const searchCategoriesByName = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const firstError = errors.array({ onlyFirstError: true })[0];
+      throw new AppError(`Validation failed: ${firstError.msg}`, 400);
+    }
+
+    const {
+      q,
+      page = 1,
+      limit = 10,
+    } = matchedData(req, { locations: ["query"] });
+
+    if (!q) {
+      // This case should ideally be caught by validator, but as a safeguard
+      return res.status(200).json({
+        success: true,
+        message: "Search query is empty, returning empty result.",
+        totalItems: 0,
+        totalPages: 0,
+        currentPage: parseInt(page, 10),
+        query: "",
+        categories: [],
+      });
+    }
+
+    const result = await searchCategoriesByNameService({
+      query: q,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Categories fetched successfully by name",
+      totalItems: result.totalItems,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
+      query: q,
+      categories: result.categories,
+    });
+  } catch (error) {
+    logger.error("Controller: Error searching categories by name:", error);
     next(error);
   }
 };

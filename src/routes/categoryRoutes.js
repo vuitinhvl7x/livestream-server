@@ -4,6 +4,7 @@ import {
   validateGetCategoriesQuery,
   validateGetCategoryParams,
   validateSearchCategoriesByTagParams,
+  validateSearchCategoriesByNameQuery,
 } from "../validators/categoryValidators.js";
 // import authMiddleware from "../middlewares/authMiddleware.js"; // Assuming you have this
 
@@ -21,6 +22,17 @@ router.get(
   "/search",
   validateSearchCategoriesByTagParams,
   categoryController.searchCategoriesByTag
+);
+
+/**
+ * @route   GET /api/categories/search/name
+ * @desc    Tìm kiếm Categories theo tên.
+ * @access  Public
+ */
+router.get(
+  "/search/name",
+  validateSearchCategoriesByNameQuery,
+  categoryController.searchCategoriesByName
 );
 
 router.get(

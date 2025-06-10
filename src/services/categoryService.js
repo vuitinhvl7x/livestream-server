@@ -487,6 +487,65 @@ export const searchCategoriesByTagService = async ({
   }
 };
 
+/**
+ * Search for categories by name.
+ * @param {object} options
+ * @param {string} options.query - The search query.
+ * @param {number} [options.page=1] - Current page for pagination.
+ * @param {number} [options.limit=10] - Number of items per page.
+ * @returns {Promise<{categories: Category[], totalItems: number, totalPages: number, currentPage: number}>}
+ */
+export const searchCategoriesByNameService = async ({
+  query,
+  page = 1,
+  limit = 10,
+}) => {
+  try {
+    logger.info(
+      `Service: Searching Categories with query: "${query}", page: ${page}, limit: ${limit}`
+    );
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const { count, rows } = await Category.findAndCountAll({
+      where: {
+        name: {
+          [Op.iLike]: `%${query}%`, // Case-insensitive search for name containing the query
+        },
+      },
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [["name", "ASC"]],
+      attributes: {
+        // Exclude fields not needed for a search result list
+        exclude: [
+          "description",
+          "tags",
+          "b2ThumbnailFileId",
+          "b2ThumbnailFileName",
+          "thumbnailUrlExpiresAt",
+          "createdAt",
+          "updatedAt",
+        ],
+      },
+    });
+
+    logger.info(`Service: Found ${count} Categories for query "${query}"`);
+
+    return {
+      categories: rows,
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+    };
+  } catch (error) {
+    logger.error(
+      `Service: Error searching Categories by query "${query}":`,
+      error
+    );
+    handleServiceError(error, "search Categories by name");
+  }
+};
+
 // Helper to find category by ID or Slug
 const findCategoryByIdOrSlug = async (identifier, includeB2Details = false) => {
   const attributes = includeB2Details
