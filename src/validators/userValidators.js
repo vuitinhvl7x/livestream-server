@@ -11,6 +11,12 @@ export const validateUserRegistration = [
     .isString()
     .isLength({ min: 6 })
     .withMessage("Password must be at least 6 characters long"),
+  body("displayName")
+    .isString()
+    .notEmpty()
+    .withMessage("Display name is required")
+    .isLength({ min: 1, max: 50 })
+    .withMessage("Display name must be between 1 and 50 characters"),
 ];
 
 export const validateUserLogin = [

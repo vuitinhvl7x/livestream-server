@@ -28,12 +28,13 @@ const generateToken = (user) => {
   );
 };
 
-export const registerUser = async (username, password) => {
+export const registerUser = async (username, password, displayName) => {
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({
       username,
       password: hashedPassword,
+      displayName,
     });
     const token = generateToken(user);
     return { user, token };

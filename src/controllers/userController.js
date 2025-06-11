@@ -16,14 +16,15 @@ export const register = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { username, password } = req.body;
-    const { user, token } = await registerUser(username, password);
+    const { username, password, displayName } = req.body;
+    const { user, token } = await registerUser(username, password, displayName);
 
     res.status(201).json({
       message: "User registered successfully",
       user: {
         id: user.id,
         username: user.username,
+        displayName: user.displayName,
         role: user.role,
         createdAt: user.createdAt,
       },
