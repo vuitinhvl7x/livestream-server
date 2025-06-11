@@ -144,10 +144,17 @@ const getVODDetails = async (req, res, next) => {
 
     // vodService.getVODById sẽ tự động refresh URL và tăng lượt xem nếu cần
     const vod = await vodService.getVODById(vodId, userIdOrIp);
-
+    const plainVod = vod.get({ plain: true });
+    if (plainVod.user) {
+      plainVod.user = {
+        id: plainVod.user.id,
+        displayName: plainVod.user.displayName,
+        avatarUrl: plainVod.user.avatarUrl,
+      };
+    }
     res.status(200).json({
       success: true,
-      data: vod, // Đã bao gồm videoUrl và urlExpiresAt được cập nhật nếu cần
+      data: plainVod, // Đã bao gồm videoUrl và urlExpiresAt được cập nhật nếu cần
     });
   } catch (error) {
     next(error);

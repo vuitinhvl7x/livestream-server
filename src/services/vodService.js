@@ -719,7 +719,7 @@ const createVOD = async (vodData) => {
     // Gửi thông báo cho followers
     if (newVOD.userId) {
       const actorUser = await User.findByPk(newVOD.userId, {
-        attributes: ["id", "username"],
+        attributes: ["id", "username", "displayName", "avatarUrl"],
       });
       if (actorUser) {
         logger.info(
@@ -743,6 +743,8 @@ const createVOD = async (vodData) => {
                   // Consistent with streamService
                   id: actorUser.id,
                   username: actorUser.username,
+                  displayName: actorUser.displayName,
+                  avatarUrl: actorUser.avatarUrl,
                 },
                 entity: { id: newVOD.id, title: newVOD.title },
                 followers: batch.map((f) => ({
@@ -751,7 +753,7 @@ const createVOD = async (vodData) => {
                   username: f.username,
                 })),
                 messageTemplate: `${
-                  actorUser.username
+                  actorUser.displayName || actorUser.username
                 } has published a new VOD: ${newVOD.title || "New Video"}!`,
               };
               await notificationQueue.add(
@@ -843,7 +845,11 @@ const getVODs = async (options = {}) => {
         "categoryId",
       ],
       include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "username", "displayName", "avatarUrl"],
+        },
         { model: Stream, as: "stream", attributes: ["id", "title"] },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],
@@ -851,9 +857,20 @@ const getVODs = async (options = {}) => {
 
     // Logic làm mới pre-signed URL nếu cần (ví dụ, chỉ làm mới khi GET chi tiết)
     // Ở đây chỉ trả về, client sẽ tự quyết định có cần refresh không.
+    const enrichedVods = rows.map((vod) => {
+      const plainVod = vod.get({ plain: true });
+      if (plainVod.user) {
+        plainVod.user = {
+          id: plainVod.user.id,
+          displayName: plainVod.user.displayName,
+          avatarUrl: plainVod.user.avatarUrl,
+        };
+      }
+      return plainVod;
+    });
 
     return {
-      vods: rows,
+      vods: enrichedVods,
       totalItems: count,
       totalPages: Math.ceil(count / limit),
       currentPage: parseInt(page, 10),
@@ -874,7 +891,11 @@ const getVODById = async (vodId, userIdOrIp) => {
   try {
     let vod = await VOD.findByPk(vodId, {
       include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "displayName", "avatarUrl"],
+        },
         {
           model: Stream,
           as: "stream",
@@ -1308,7 +1329,11 @@ const searchVODs = async ({
     const offset = (page - 1) * limit;
     const whereClause = {}; // For VOD model
     const includeClauses = [
-      { model: User, as: "user", attributes: ["id", "username"] },
+      {
+        model: User,
+        as: "user",
+        attributes: ["id", "username", "displayName", "avatarUrl"],
+      },
       {
         model: Category,
         as: "category",
@@ -1389,6 +1414,13 @@ const searchVODs = async ({
     // Đảm bảo viewCount có trong kết quả trả về
     const enrichedVods = rows.map((vod) => {
       const plainVod = vod.get({ plain: true });
+      if (plainVod.user) {
+        plainVod.user = {
+          id: plainVod.user.id,
+          displayName: plainVod.user.displayName,
+          avatarUrl: plainVod.user.avatarUrl,
+        };
+      }
       return {
         ...plainVod,
         viewCount: plainVod.viewCount !== undefined ? plainVod.viewCount : 0, // Đảm bảo có giá trị mặc định
@@ -1404,7 +1436,8 @@ const searchVODs = async ({
         user: plainVod.user
           ? {
               id: plainVod.user.id,
-              username: plainVod.user.username,
+              displayName: plainVod.user.displayName,
+              avatarUrl: plainVod.user.avatarUrl,
             }
           : null,
       };

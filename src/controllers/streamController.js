@@ -235,7 +235,13 @@ export const getStreams = async (req, res) => {
         playbackUrls: stream.playbackUrls,
         thumbnailUrl: stream.thumbnailUrl,
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
-        user: stream.user,
+        user: stream.user
+          ? {
+              id: stream.user.id,
+              displayName: stream.user.displayName,
+              avatarUrl: stream.user.avatarUrl,
+            }
+          : null,
         category: stream.category,
         createdAt: stream.createdAt,
       })),
@@ -284,7 +290,13 @@ export const getStreamById = async (req, res, next) => {
         thumbnailUrl: stream.thumbnailUrl,
         thumbnailUrlExpiresAt: stream.thumbnailUrlExpiresAt,
         // streamKey: stream.streamKey, // TODO: Remove this field from response
-        user: stream.user,
+        user: stream.user
+          ? {
+              id: stream.user.id,
+              displayName: stream.user.displayName,
+              avatarUrl: stream.user.avatarUrl,
+            }
+          : null,
         category: stream.category,
         createdAt: stream.createdAt,
         updatedAt: stream.updatedAt,
@@ -322,6 +334,17 @@ export const searchStreams = async (req, res, next) => {
 
     const result = await searchStreamsService(searchCriteria);
 
+    const streams = result.streams.map((stream) => ({
+      ...stream,
+      user: stream.user
+        ? {
+            id: stream.user.id,
+            displayName: stream.user.displayName,
+            avatarUrl: stream.user.avatarUrl,
+          }
+        : null,
+    }));
+
     res.status(200).json({
       success: true,
       message: "Streams fetched successfully based on search criteria",
@@ -333,7 +356,7 @@ export const searchStreams = async (req, res, next) => {
       totalItems: result.totalItems,
       totalPages: result.totalPages,
       currentPage: result.currentPage,
-      streams: result.streams,
+      streams: streams,
     });
   } catch (error) {
     logger.error("Controller: Error searching streams:", error);
@@ -359,6 +382,14 @@ export const getVodByStreamId = async (req, res, next) => {
 
     if (!vod) {
       return next(new AppError("No VOD found for this stream.", 404));
+    }
+
+    if (vod.user) {
+      vod.user = {
+        id: vod.user.id,
+        displayName: vod.user.displayName,
+        avatarUrl: vod.user.avatarUrl,
+      };
     }
 
     res.status(200).json({

@@ -455,7 +455,11 @@ export const getStreamsListService = async (queryParams) => {
     const { count, rows } = await Stream.findAndCountAll({
       where: whereClause,
       include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "displayName", "avatarUrl"],
+        },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
       ],
       order: [["createdAt", "DESC"]],
@@ -513,7 +517,11 @@ export const getStreamDetailsService = async (streamId) => {
   try {
     const stream = await Stream.findByPk(streamId, {
       include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "displayName", "avatarUrl"],
+        },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
       ],
     });
@@ -620,7 +628,13 @@ export const markLive = async (streamKey) => {
   try {
     const stream = await Stream.findOne({
       where: { streamKey },
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }], // Include User để lấy thông tin actor
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "username", "displayName", "avatarUrl"],
+        },
+      ], // Include User để lấy thông tin actor
     });
 
     if (!stream) {
@@ -664,7 +678,7 @@ export const markLive = async (streamKey) => {
       if (oldStatus !== "live") {
         if (stream.user && stream.user.id) {
           logger.info(
-            `Stream ${streamKey} is now live, preparing to notify followers of user ${stream.user.username} (ID: ${stream.user.id})`
+            `Stream ${streamKey} is now live, preparing to notify followers of user ${stream.user.displayName} (ID: ${stream.user.id})`
           );
 
           try {
@@ -686,6 +700,8 @@ export const markLive = async (streamKey) => {
                   actorUser: {
                     id: stream.user.id,
                     username: stream.user.username,
+                    displayName: stream.user.displayName,
+                    avatarUrl: stream.user.avatarUrl,
                   },
                   entity: { id: stream.id, title: stream.title },
                   followers: batch.map((f) => ({
@@ -693,7 +709,7 @@ export const markLive = async (streamKey) => {
                     username: f.username,
                   })), // Chỉ gửi id và username
                   messageTemplate: `${
-                    stream.user.username
+                    stream.user.displayName || stream.user.username
                   } has started streaming: ${stream.title || "Live Stream"}!`,
                 };
                 await notificationQueue.add(
@@ -832,7 +848,11 @@ export const searchStreamsService = async ({
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const whereClause = {};
     const includeClauses = [
-      { model: User, as: "user", attributes: ["id", "username"] },
+      {
+        model: User,
+        as: "user",
+        attributes: ["id", "username", "displayName", "avatarUrl"],
+      },
       {
         model: Category,
         as: "category",
@@ -1145,7 +1165,11 @@ export const getVodByStreamIdService = async (streamId) => {
     const vod = await VOD.findOne({
       where: { streamId: streamId },
       include: [
-        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "displayName", "avatarUrl"],
+        },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],
     });
