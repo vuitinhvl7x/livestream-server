@@ -458,7 +458,7 @@ export const getStreamsListService = async (queryParams) => {
         {
           model: User,
           as: "user",
-          attributes: ["id", "displayName", "avatarUrl"],
+          attributes: ["id", "username", "displayName", "avatarUrl"],
         },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
       ],
@@ -520,7 +520,7 @@ export const getStreamDetailsService = async (streamId) => {
         {
           model: User,
           as: "user",
-          attributes: ["id", "displayName", "avatarUrl"],
+          attributes: ["id", "username", "displayName", "avatarUrl"],
         },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] }, // Include Category
       ],
@@ -1168,7 +1168,7 @@ export const getVodByStreamIdService = async (streamId) => {
         {
           model: User,
           as: "user",
-          attributes: ["id", "displayName", "avatarUrl"],
+          attributes: ["id", "username", "displayName", "avatarUrl"],
         },
         { model: Category, as: "category", attributes: ["id", "name", "slug"] },
       ],

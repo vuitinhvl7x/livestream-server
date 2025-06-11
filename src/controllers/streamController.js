@@ -238,6 +238,7 @@ export const getStreams = async (req, res) => {
         user: stream.user
           ? {
               id: stream.user.id,
+              username: stream.user.username,
               displayName: stream.user.displayName,
               avatarUrl: stream.user.avatarUrl,
             }
@@ -293,6 +294,7 @@ export const getStreamById = async (req, res, next) => {
         user: stream.user
           ? {
               id: stream.user.id,
+              username: stream.user.username,
               displayName: stream.user.displayName,
               avatarUrl: stream.user.avatarUrl,
             }
@@ -339,6 +341,7 @@ export const searchStreams = async (req, res, next) => {
       user: stream.user
         ? {
             id: stream.user.id,
+            username: stream.user.username,
             displayName: stream.user.displayName,
             avatarUrl: stream.user.avatarUrl,
           }
@@ -387,6 +390,7 @@ export const getVodByStreamId = async (req, res, next) => {
     if (vod.user) {
       vod.user = {
         id: vod.user.id,
+        username: vod.user.username,
         displayName: vod.user.displayName,
         avatarUrl: vod.user.avatarUrl,
       };

@@ -862,6 +862,7 @@ const getVODs = async (options = {}) => {
       if (plainVod.user) {
         plainVod.user = {
           id: plainVod.user.id,
+          username: plainVod.user.username,
           displayName: plainVod.user.displayName,
           avatarUrl: plainVod.user.avatarUrl,
         };
@@ -894,7 +895,7 @@ const getVODById = async (vodId, userIdOrIp) => {
         {
           model: User,
           as: "user",
-          attributes: ["id", "displayName", "avatarUrl"],
+          attributes: ["id", "username", "displayName", "avatarUrl"],
         },
         {
           model: Stream,
@@ -1417,6 +1418,7 @@ const searchVODs = async ({
       if (plainVod.user) {
         plainVod.user = {
           id: plainVod.user.id,
+          username: plainVod.user.username,
           displayName: plainVod.user.displayName,
           avatarUrl: plainVod.user.avatarUrl,
         };
@@ -1436,6 +1438,7 @@ const searchVODs = async ({
         user: plainVod.user
           ? {
               id: plainVod.user.id,
+              username: plainVod.user.username,
               displayName: plainVod.user.displayName,
               avatarUrl: plainVod.user.avatarUrl,
             }

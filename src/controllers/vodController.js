@@ -148,6 +148,7 @@ const getVODDetails = async (req, res, next) => {
     if (plainVod.user) {
       plainVod.user = {
         id: plainVod.user.id,
+        username: plainVod.user.username,
         displayName: plainVod.user.displayName,
         avatarUrl: plainVod.user.avatarUrl,
       };
