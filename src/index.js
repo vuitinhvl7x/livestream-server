@@ -59,7 +59,7 @@ createBullBoard({
 app.use("/admin/queues", serverAdapter.getRouter());
 
 // Middleware
-app.use(morgan("dev"));
+// app.use(morgan("dev"));
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "*",
@@ -88,6 +88,7 @@ app.get("/", (req, res) => {
 
 // Database connection and server start
 const PORT = process.env.PORT || 5000;
+const LOCAL_IP = "192.168.0.200";
 
 // Initialize Socket.IO handlers (example, actual implementation might differ)
 initializeSocketHandlers(io);
@@ -100,8 +101,7 @@ const startServer = async () => {
 
     await connectMongoDB(); // Kết nối MongoDB
     // logger.info("MongoDB connected successfully."); // Thêm log cho MongoDB nếu connectMongoDB không có log riêng
-
-    server.listen(PORT, () => {
+    server.listen(PORT, LOCAL_IP, () => {
       logger.info(`Server is running on port ${PORT}`);
       logger.info(`Socket.IO initialized and listening on port ${PORT}`);
       // Log xác nhận worker đã được load và (ngầm) khởi động

@@ -198,19 +198,19 @@
 
     ### 2.2.1 Tìm kiếm Stream
 
-    - **Mục đích:** Tìm kiếm stream theo từ khóa, tag hoặc tên streamer.
+    - **Mục đích:** Tìm kiếm stream theo từ khóa, tag hoặc tên streamer. Backend sẽ tìm kiếm không phân biệt chữ hoa/thường.
     - **Method:** `GET`
     - **URL:** `/api/streams/search`
     - **Authentication:** Không yêu cầu.
 
     **Tham số Query (Query Params):**
 
-    - `page` (int, optional, default: 1): Số trang.
-    - `limit` (int, optional, default: 10): Số lượng stream mỗi trang.
-    - `searchQuery` (string, optional): Từ khóa tìm kiếm trong tiêu đề và mô tả.
-    - `tag` (string, optional): Tìm kiếm stream theo tag của category.
-    - `streamerUsername` (string, optional): Tìm kiếm stream theo tên của streamer.
-      (Phải cung cấp ít nhất một trong ba tham số: `searchQuery`, `tag`, `streamerUsername`)
+    - `searchQuery` (string, optional): Từ khóa tìm trong tiêu đề và mô tả của stream.
+    - `tag` (string, optional): Lọc stream theo một tag cụ thể trong danh mục.
+    - `streamerUsername` (string, optional): Lọc theo tên của streamer.
+    - `page` (number, optional, default: 1): Dùng để phân trang.
+    - `limit` (number, optional, default: 10): Số lượng kết quả mỗi trang.
+      (Phải cung cấp ít nhất một trong ba tham số: `searchQuery`, `tag`, hoặc `streamerUsername`)
 
     **Phản hồi thành công (200 OK):**
 
@@ -748,19 +748,19 @@
 
 ### 5.2 Tìm kiếm VOD
 
-- **Mục đích:** Tìm kiếm VOD theo từ khóa, tag hoặc tên người đăng.
+- **Mục đích:** Tìm kiếm VOD theo từ khóa, tag hoặc tên người đăng. Backend sẽ tìm kiếm không phân biệt chữ hoa/thường.
 - **Method:** `GET`
 - **URL:** `/api/vod/search`
 - **Authentication:** Không yêu cầu.
 
 **Tham số Query (Query Params):**
 
-- `page` (int, optional, default: 1): Số trang.
-- `limit` (int, optional, default: 10): Số lượng VOD mỗi trang.
-- `searchQuery` (string, optional): Từ khóa tìm kiếm trong tiêu đề và mô tả.
-- `tag` (string, optional): Tìm kiếm VOD theo tag của category.
-- `uploaderUsername` (string, optional): Tìm kiếm VOD theo tên người đăng.
-  (Phải cung cấp ít nhất một trong ba tham số: `searchQuery`, `tag`, `uploaderUsername`)
+- `searchQuery` (string, optional): Từ khóa tìm trong tiêu đề và mô tả của VOD.
+- `tag` (string, optional): Lọc VOD theo một tag cụ thể trong danh mục.
+- `uploaderUsername` (string, optional): Lọc theo tên của người đã đăng VOD.
+- `page` (number, optional, default: 1): Dùng để phân trang.
+- `limit` (number, optional, default: 10): Số lượng kết quả mỗi trang.
+  (Phải cung cấp ít nhất một trong ba tham số: `searchQuery`, `tag`, hoặc `uploaderUsername`)
 
 **Phản hồi thành công (200 OK):**
 

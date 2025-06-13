@@ -155,31 +155,28 @@ const initializeSocketHandlers = (io) => {
           `User ${socket.user.username} (${socket.id}) joined room (streamId): ${roomId} (maps to streamKey: ${streamKey})`
         );
 
-        // Gửi lịch sử chat gần đây cho user vừa join
+        // Gửi lịch sử chat gần đây cho user vừa join để tránh race condition.
         try {
           const chatHistory = await getChatHistoryByStreamId(roomId, {
             page: 1,
             limit: 20,
           }); // Lấy 20 tin nhắn gần nhất
-          if (
-            chatHistory &&
-            chatHistory.messages &&
-            chatHistory.messages.length > 0
-          ) {
-            socket.emit("recent_chat_history", {
-              streamId: roomId,
-              messages: chatHistory.messages,
-            });
-            logger.info(
-              `Sent recent chat history to ${socket.user.username} for room ${roomId} (${chatHistory.messages.length} messages).`
-            );
-          }
+
+          // Gửi riêng cho socket vừa join, ngay cả khi history rỗng.
+          socket.emit("recent_chat_history", {
+            streamId: roomId,
+            messages: chatHistory?.messages || [],
+          });
+
+          logger.info(
+            `Sent recent chat history to ${socket.user.username} for room ${roomId}.`
+          );
         } catch (historyError) {
           logger.error(
             `Error fetching recent chat history for room ${roomId}:`,
             historyError
           );
-          // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công
+          // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công.
         }
 
         const userId = socket.user.id;

@@ -226,6 +226,7 @@ export const getStreams = async (req, res) => {
       streams: result.streams.map((stream) => ({
         id: stream.id,
         title: stream.title,
+        streamKey: stream.streamKey,
         description: stream.description,
         status: stream.status,
         startTime: stream.startTime,
