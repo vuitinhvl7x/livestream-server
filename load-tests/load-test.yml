@@ -1,0 +1,39 @@
+config:
+  # Target là URL HTTP cơ sở. Engine sẽ xử lý phần websocket.
+  target: "http://192.168.0.200:5000"
+  processor: "./processor.js" # <-- NẠP PROCESSOR FUNCTION
+  socketio:
+    path: "/app/socket.io" # Chỉ định đường dẫn tùy chỉnh ở đây
+    # Sử dụng `auth` payload, cách được khuyến khích cho Socket.IO
+    auth:
+      # Token này bây giờ là của một user thật, được dùng để kết nối ban đầu
+      token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTUsInVzZXJuYW1lIjoiZHVjbWluaCIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzQ5OTI5Njg0LCJleHAiOjE3NDk5NTEyODR9.5b7dJ8X7P4WfyqxsqMQ0PPpkEbAzjvP-3xO_Z6L3o7E"
+  phases:
+    - duration: 120 # Tổng thời gian chạy test (giây)
+      arrivalRate: 10 # Số lượng người dùng mới kết nối mỗi giây
+      name: "Livestream Chat Load Test for 1200 VUs"
+  # Bỏ hoàn toàn 'environments' và 'payload' vì processor đã xử lý
+scenarios:
+  - name: "Livestream Viewer Chat Scenario"
+    engine: "socketio" # <-- KHAI BÁO LẠI ENGINE CHUYÊN DỤNG
+    flow:
+      # 1. Chạy function để lấy user và message ngẫu nhiên từ CSV
+      - function: "setRandomUser"
+
+      # 2. Tham gia phòng chat của stream
+      - emit:
+          channel: "join_stream_room"
+          data:
+            streamId: 49 # ID của stream đang live
+      - think: 2 # Chờ 2 giây để tham gia phòng và nhận lịch sử chat
+
+      # 3. Lặp lại việc gửi tin nhắn chat
+      - loop:
+          - emit:
+              channel: "chat_message"
+              data:
+                streamId: 49 # ID của stream
+                message: "{{ message_content }}" # <-- Lấy từ processor
+                artilleryUsername: "{{ username }}" # <-- Lấy từ processor
+          - think: 5 # Chờ 5 giây trước khi gửi tin nhắn tiếp theo
+        count: 5 # Mỗi user sẽ gửi 5 tin nhắn

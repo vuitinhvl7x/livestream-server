@@ -31,41 +31,40 @@ export const saveChatMessage = async (messageData) => {
 };
 
 /**
- * Lấy lịch sử chat cho một stream cụ thể với phân trang.
+ * Lấy lịch sử chat cho một stream cụ thể, hỗ trợ phân trang kiểu "tải thêm" (cursor-based).
  * @param {string} streamId - ID của stream.
- * @param {object} paginationOptions - Tùy chọn phân trang { page, limit }.
- * @returns {Promise<object>} Bao gồm danh sách tin nhắn, tổng số trang, trang hiện tại.
+ * @param {object} options - Tùy chọn truy vấn.
+ * @param {number} [options.limit=50] - Số lượng tin nhắn tối đa cần lấy.
+ * @param {string|Date} [options.before=null] - Cursor (timestamp) để lấy các tin nhắn cũ hơn.
+ * @returns {Promise<object>} Chỉ chứa mảng tin nhắn { messages: [...] }.
  * @throws {Error} Nếu có lỗi khi truy vấn.
  */
-export const getChatHistoryByStreamId = async (streamId, paginationOptions) => {
-  const { page = 1, limit = 50 } = paginationOptions;
-  const skip = (page - 1) * limit;
-
+export const getChatHistoryByStreamId = async (
+  streamId,
+  { limit = 50, before = null }
+) => {
   try {
     if (!process.env.MONGODB_URI) {
       logger.warn("Attempted to get chat history, but MONGODB_URI is not set.");
-      return {
-        messages: [],
-        totalPages: 0,
-        currentPage: page,
-        totalMessages: 0,
-      };
+      return { messages: [] };
     }
 
-    const messages = await ChatMessage.find({ streamId })
-      .sort({ timestamp: -1 }) // Sắp xếp mới nhất lên đầu (cho query)
-      .skip(skip)
+    const query = { streamId };
+
+    // Nếu có cursor 'before', tìm các tin nhắn có timestamp nhỏ hơn (cũ hơn).
+    if (before) {
+      query.timestamp = { $lt: new Date(before) };
+    }
+
+    const messages = await ChatMessage.find(query)
+      .sort({ timestamp: -1 }) // Luôn lấy những tin mới nhất trong tập kết quả
       .limit(limit)
       .lean(); // .lean() để trả về plain JS objects
 
-    const totalMessages = await ChatMessage.countDocuments({ streamId });
-    const totalPages = Math.ceil(totalMessages / limit);
-
+    // Kết quả trả về đang là [mới nhất, ..., cũ nhất]
+    // Đảo ngược lại để client có thể dễ dàng chèn vào đầu danh sách [cũ nhất, ..., mới nhất]
     return {
-      messages: messages.reverse(), // Đảo ngược lại để client hiển thị từ cũ -> mới
-      totalPages,
-      currentPage: page,
-      totalMessages,
+      messages: messages.reverse(),
     };
   } catch (error) {
     logger.error("Error fetching chat history in service:", error);

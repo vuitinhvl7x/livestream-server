@@ -31,12 +31,14 @@ import { BullMQAdapter } from "@bull-board/api/bullMQAdapter.js";
 import { ExpressAdapter } from "@bull-board/express";
 // Import your queue
 import notificationQueue from "./queues/notificationQueue.js";
+import expressStatusMonitor from "express-status-monitor";
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Socket.IO server
+// Initialize Socket.IO server FIRST
 const io = new Server(server, {
+  path: "/app/socket.io",
   cors: {
     origin: process.env.CLIENT_URL || "*",
     methods: ["GET", "POST"],
@@ -44,6 +46,9 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+
+// THEN, pass the io instance to the monitor
+app.use(expressStatusMonitor({ io: io }));
 
 setNotificationServiceIo(io);
 
@@ -88,7 +93,7 @@ app.get("/", (req, res) => {
 
 // Database connection and server start
 const PORT = process.env.PORT || 5000;
-const LOCAL_IP = "192.168.0.200";
+const LOCAL_IP = "0.0.0.0";
 
 // Initialize Socket.IO handlers (example, actual implementation might differ)
 initializeSocketHandlers(io);
@@ -102,15 +107,20 @@ const startServer = async () => {
     await connectMongoDB(); // Kết nối MongoDB
     // logger.info("MongoDB connected successfully."); // Thêm log cho MongoDB nếu connectMongoDB không có log riêng
     server.listen(PORT, LOCAL_IP, () => {
-      logger.info(`Server is running on port ${PORT}`);
-      logger.info(`Socket.IO initialized and listening on port ${PORT}`);
+      logger.info(`Server is running on http://${LOCAL_IP}:${PORT}`);
+      logger.info(
+        `Socket.IO initialized and listening on ws://${LOCAL_IP}:${PORT}`
+      );
       // Log xác nhận worker đã được load và (ngầm) khởi động
       if (notificationWorker) {
         logger.info("Notification Worker has been loaded and is running.");
       }
       // Log cho Bull Board
       logger.info(
-        `Bull Board is available at http://localhost:${PORT}/admin/queues`
+        `Bull Board is available at http://${LOCAL_IP}:${PORT}/admin/queues`
+      );
+      logger.info(
+        `Express Status Monitor is available at http://${LOCAL_IP}:${PORT}/status`
       );
     });
   } catch (error) {

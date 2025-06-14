@@ -27,7 +27,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const initializeSocketHandlers = (io) => {
   // Middleware xác thực JWT cho Socket.IO
   io.use((socket, next) => {
-    const token = socket.handshake.auth.token; // Client gửi token qua socket.handshake.auth
+    const token =
+      socket.handshake.auth.token ||
+      socket.handshake.headers.authorization?.split(" ")[1];
     if (!token) {
       return next(new Error("Authentication error: Token not provided"));
     }
@@ -157,10 +159,10 @@ const initializeSocketHandlers = (io) => {
 
         // Gửi lịch sử chat gần đây cho user vừa join để tránh race condition.
         try {
+          // Lấy 50 tin nhắn gần nhất, không cần cursor
           const chatHistory = await getChatHistoryByStreamId(roomId, {
-            page: 1,
-            limit: 20,
-          }); // Lấy 20 tin nhắn gần nhất
+            limit: 50,
+          });
 
           // Gửi riêng cho socket vừa join, ngay cả khi history rỗng.
           socket.emit("recent_chat_history", {
@@ -169,11 +171,11 @@ const initializeSocketHandlers = (io) => {
           });
 
           logger.info(
-            `Sent recent chat history to ${socket.user.username} for room ${roomId}.`
+            `Sent initial chat history to ${socket.user.username} for room ${roomId}.`
           );
         } catch (historyError) {
           logger.error(
-            `Error fetching recent chat history for room ${roomId}:`,
+            `Error fetching initial chat history for room ${roomId}:`,
             historyError
           );
           // Không cần gửi lỗi cho client ở đây, vì join phòng vẫn thành công.
@@ -209,8 +211,47 @@ const initializeSocketHandlers = (io) => {
       }
     });
 
+    socket.on("get_older_messages", async (data, callback) => {
+      const { streamId, beforeTimestamp } = data;
+      const roomId = streamId?.toString();
+
+      if (!roomId || !beforeTimestamp) {
+        const errorMsg = "Stream ID and 'beforeTimestamp' are required.";
+        logger.warn(
+          `[get_older_messages] Invalid data from ${socket.user?.username}: ${errorMsg}`
+        );
+        if (callback) callback({ error: errorMsg });
+        return;
+      }
+
+      try {
+        const history = await getChatHistoryByStreamId(roomId, {
+          limit: 50, // Lấy 50 tin nhắn cũ hơn nữa
+          before: beforeTimestamp,
+        });
+
+        // Gửi lại cho client đã yêu cầu
+        socket.emit("older_chat_history", {
+          streamId: roomId,
+          messages: history.messages || [],
+        });
+
+        if (callback)
+          callback({ success: true, count: history.messages.length });
+      } catch (error) {
+        logger.error(
+          `[get_older_messages] Error fetching older chat history for room ${roomId}:`,
+          error
+        );
+        if (callback)
+          callback({
+            error: "A server error occurred while fetching messages.",
+          });
+      }
+    });
+
     socket.on("chat_message", async (data) => {
-      const { streamId, message } = data; // Client gửi streamId (có thể là số hoặc chuỗi)
+      const { streamId, message, artilleryUsername } = data; // <-- Lấy cả artilleryUsername
       const roomId = streamId?.toString(); // roomId chắc chắn là chuỗi, dùng cho tên phòng socket
 
       if (!roomId || !message) {
@@ -241,7 +282,7 @@ const initializeSocketHandlers = (io) => {
         const savedMessage = await saveChatMessage({
           streamId: roomId, // LUÔN DÙNG roomId (là streamId.toString()) để đảm bảo là chuỗi cho MongoDB
           userId: socket.user.id,
-          username: socket.user.username,
+          username: artilleryUsername || socket.user.username, // <-- SỬ DỤNG artilleryUsername NẾU CÓ
           message,
         });
 
@@ -251,7 +292,7 @@ const initializeSocketHandlers = (io) => {
           username: savedMessage.username,
           message: savedMessage.message,
           timestamp: savedMessage.timestamp,
-          streamId: roomId, // Trả về streamId (roomId) cho client
+          streamId: roomId,
         });
       } catch (error) {
         logger.error(
