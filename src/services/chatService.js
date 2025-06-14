@@ -71,3 +71,27 @@ export const getChatHistoryByStreamId = async (
     throw new Error("Failed to fetch chat history: " + error.message);
   }
 };
+
+/**
+ * Đếm số lượng tin nhắn mới trong một stream kể từ một mốc thời gian.
+ * @param {string} streamId - ID của stream.
+ * @param {string|Date} timestamp - Mốc thời gian để bắt đầu đếm.
+ * @returns {Promise<number>} Số lượng tin nhắn mới.
+ */
+export const countMessagesAfterTimestamp = async (streamId, timestamp) => {
+  try {
+    // Nếu không có MongoDB, không thể có tin nhắn mới.
+    if (!process.env.MONGODB_URI) {
+      return 0;
+    }
+    const count = await ChatMessage.countDocuments({
+      streamId: streamId,
+      timestamp: { $gt: new Date(timestamp) },
+    });
+    return count;
+  } catch (error) {
+    // Trả về 0 để không phá vỡ luồng tóm tắt nếu có lỗi DB
+    logger.error(`Error counting new messages for stream ${streamId}:`, error);
+    return 0;
+  }
+};

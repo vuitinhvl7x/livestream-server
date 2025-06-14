@@ -24,7 +24,7 @@ scenarios:
       - emit:
           channel: "join_stream_room"
           data:
-            streamId: 49 # ID của stream đang live
+            streamId: 50 # ID của stream đang live
       - think: 2 # Chờ 2 giây để tham gia phòng và nhận lịch sử chat
 
       # 3. Lặp lại việc gửi tin nhắn chat
@@ -32,7 +32,7 @@ scenarios:
           - emit:
               channel: "chat_message"
               data:
-                streamId: 49 # ID của stream
+                streamId: 50 # ID của stream
                 message: "{{ message_content }}" # <-- Lấy từ processor
                 artilleryUsername: "{{ username }}" # <-- Lấy từ processor
           - think: 5 # Chờ 5 giây trước khi gửi tin nhắn tiếp theo

@@ -1297,3 +1297,122 @@ _Server sẽ không trả về body, tin nhắn mới sẽ được broadcast qu
 - **URL:** `/api/webhooks/backblaze`
 - **Body:** `JSON` (theo định dạng của B2)
 - **Ghi chú:** Endpoint này dùng để tự động tạo VOD sau khi file stream được ghi lại và upload lên B2.
+
+---
+
+## 9. Tính năng AI (Trí tuệ nhân tạo)
+
+Phần này mô tả các API liên quan đến các tính năng sử dụng trí tuệ nhân tạo, như tóm tắt chat.
+
+### 9.1. Lấy danh sách Model AI
+
+Lấy danh sách tất cả các model AI có sẵn từ nhà cung cấp (ví dụ: HelixMind) để sử dụng cho các tính năng AI như tóm tắt.
+
+- **URL** : `/api/ai/models`
+- **Method** : `GET`
+- **Yêu cầu xác thực** : Không.
+
+#### Phản hồi thành công (Success Response)
+
+- **Code** : `200 OK`
+- **Nội dung** :
+
+```json
+{
+  "message": "Successfully retrieved available AI models.",
+  "data": [
+    "o3",
+    "o3-low",
+    "gpt-4o",
+    "claude-3-5-sonnet-20240620",
+    "mistral-large-latest",
+    "... và nhiều model khác"
+  ]
+}
+```
+
+---
+
+### 9.2. Tóm tắt Chat của một Stream
+
+Yêu cầu hệ thống tạo hoặc lấy từ cache một bản tóm tắt cho lịch sử chat của một stream cụ thể.
+
+- **URL** : `/api/ai/streams/:streamId/summarize`
+- **Method** : `POST`
+- **Yêu cầu xác thực** : `Bearer Token`.
+
+#### URL Params
+
+- **Bắt buộc**:
+  - `streamId=[integer]` : ID của stream cần tóm tắt.
+
+#### Headers
+
+- **Bắt buộc**:
+  - `Authorization: Bearer <your_jwt_token>`
+  - `Content-Type: application/json`
+
+#### Body (Request Body)
+
+- **Tùy chọn**:
+
+  - `model=[string]` : ID của model AI muốn sử dụng để tóm tắt. Nếu không cung cấp, hệ thống sẽ sử dụng model mặc định (`OPENAI_DEFAULT_SUMMARY_MODEL` trong `.env`).
+  - `numMessages=[integer]` : Số lượng tin nhắn gần nhất muốn tóm tắt. Nếu không cung cấp, hệ thống sẽ sử dụng giá trị mặc định (`OPENAI_MAX_SUMMARY_MESSAGES` trong `.env`). Giá trị phải từ 10 đến 500.
+
+- **Ví dụ**:
+
+```json
+{
+  "model": "claude-3-5-sonnet-20240620",
+  "numMessages": 150
+}
+```
+
+#### Phản hồi thành công (Success Response)
+
+- **Code** : `200 OK`
+- **Nội dung** :
+
+```json
+{
+  "message": "Chat summary generated successfully.",
+  "data": {
+    "modelUsed": "claude-3-5-sonnet-20240620",
+    "summary": "Bản tóm tắt cuộc trò chuyện bằng tiếng Việt sẽ được trả về ở đây. Nội dung sẽ tổng kết các ý chính, các câu hỏi và những điểm nổi bật trong cuộc hội thoại của stream."
+  }
+}
+```
+
+#### Phản hồi lỗi (Error Response)
+
+- **Code** : `400 Bad Request`
+- **Nguyên nhân**: Dữ liệu đầu vào không hợp lệ (ví dụ: `streamId` không phải là số, `numMessages` ngoài khoảng cho phép).
+- **Nội dung**:
+
+```json
+{
+  "message": "Validation failed.",
+  "errors": [
+    {
+      "type": "field",
+      "value": "abc",
+      "msg": "Stream ID must be a positive integer.",
+      "path": "streamId",
+      "location": "params"
+    }
+  ]
+}
+```
+
+- **Code** : `401 Unauthorized`
+- **Nguyên nhân**: Token không được cung cấp hoặc không hợp lệ.
+
+- **Code** : `404 Not Found`
+- **Nguyên nhân**: Stream được yêu cầu không có tin nhắn nào để tóm tắt.
+- **Nội dung**:
+
+```json
+{
+  "message": "No chat history found for this stream to summarize."
+}
+```

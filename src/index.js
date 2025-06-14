@@ -21,6 +21,7 @@ import categoryRoutes from "./routes/categoryRoutes.js";
 import categoryAdminRoutes from "./routes/admin/categoryAdminRoutes.js";
 import followRoutes from "./routes/followRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import aiRoutes from "./routes/aiRoutes.js"; // Import AI routes
 // Import BullMQ Worker
 import notificationWorker from "./workers/notificationWorker.js"; // Worker sẽ tự khởi động khi được import
 // Import logger
@@ -82,6 +83,7 @@ app.use("/api/webhook", webhookRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/vod", vodRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/ai", aiRoutes); // Sử dụng AI routes
 // Add category routes
 app.use("/api/categories", categoryRoutes);
 app.use("/api/admin/categories", categoryAdminRoutes);
