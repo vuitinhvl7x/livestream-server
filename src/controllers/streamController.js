@@ -385,7 +385,11 @@ export const getVodByStreamId = async (req, res, next) => {
     const vod = await getVodByStreamIdService(id);
 
     if (!vod) {
-      return next(new AppError("No VOD found for this stream.", 404));
+      return res.status(200).json({
+        success: true,
+        message: "Không có VOD nào được tìm thấy cho stream này.",
+        vod: null,
+      });
     }
 
     if (vod.user) {

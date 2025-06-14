@@ -303,9 +303,10 @@ export const getUserProfileById = async (userId) => {
   }
 };
 
-export const getAllUsers = async () => {
+export const getAllUsers = async (page = 1, limit = 10) => {
   try {
-    const users = await User.findAll({
+    const offset = (page - 1) * limit;
+    const { count, rows: users } = await User.findAndCountAll({
       attributes: [
         "id",
         "username",
@@ -317,9 +318,12 @@ export const getAllUsers = async () => {
         "createdAt",
         "updatedAt",
       ],
+      limit,
+      offset,
+      order: [["createdAt", "DESC"]],
     });
     // Optionally, you can implement logic to refresh avatarUrls here if needed, similar to getUserProfileById
-    return users;
+    return { totalUsers: count, users };
   } catch (error) {
     logger.error("Service: Error in getAllUsers:", error);
     throw new AppError(

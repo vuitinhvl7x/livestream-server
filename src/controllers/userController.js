@@ -141,8 +141,17 @@ export const getMyProfile = async (req, res) => {
 
 export const getAllUsersController = async (req, res) => {
   try {
-    const users = await getAllUsers();
-    res.status(200).json(users);
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+
+    const { totalUsers, users } = await getAllUsers(page, limit);
+
+    res.status(200).json({
+      totalUsers,
+      totalPages: Math.ceil(totalUsers / limit),
+      currentPage: page,
+      users,
+    });
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ error: error.message });
