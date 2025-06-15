@@ -27,6 +27,12 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const initializeSocketHandlers = (io) => {
   // Middleware xác thực JWT cho Socket.IO
   io.use((socket, next) => {
+    // Logging để debug - Kiểm tra toàn bộ handshake object
+    console.log(
+      "New socket connection handshake:",
+      JSON.stringify(socket.handshake, null, 2)
+    );
+
     const token =
       socket.handshake.auth.token ||
       socket.handshake.headers.authorization?.split(" ")[1];

@@ -32,7 +32,7 @@ export const summarizeStreamChat = async (req, res, next) => {
   try {
     const { streamId } = req.params;
     const {
-      model = process.env.OPENAI_DEFAULT_SUMMARY_MODEL || "gpt-3.5-turbo",
+      model = process.env.OPENAI_DEFAULT_SUMMARY_MODEL || "gpt-4o-mini",
       numMessages = parseInt(process.env.OPENAI_MAX_SUMMARY_MESSAGES, 10) ||
         100,
     } = req.body;

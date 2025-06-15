@@ -7,11 +7,13 @@ config:
     # Sử dụng `auth` payload, cách được khuyến khích cho Socket.IO
     auth:
       # Token này bây giờ là của một user thật, được dùng để kết nối ban đầu
-      token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTUsInVzZXJuYW1lIjoiZHVjbWluaCIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzQ5OTI5Njg0LCJleHAiOjE3NDk5NTEyODR9.5b7dJ8X7P4WfyqxsqMQ0PPpkEbAzjvP-3xO_Z6L3o7E"
+      # LƯU Ý: Token này có thể hết hạn, bạn cần cập nhật nếu chạy test sau này.
+      token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTUsInVzZXJuYW1lIjoiZHVjbWluaCIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzQ5OTcwNjIwLCJleHAiOjE3NDk5OTIyMjB9.7QhUoCRF6L2Rhdz06ffs9pQZ8gOddoBNGzNgB3_FIlA"
   phases:
-    - duration: 120 # Tổng thời gian chạy test (giây)
-      arrivalRate: 10 # Số lượng người dùng mới kết nối mỗi giây
-      name: "Livestream Chat Load Test for 1200 VUs"
+    - duration: 100 # Tổng thời gian chạy test (giây)
+      arrivalRate: 3 # <-- ĐIỀU CHỈNH: Tăng lên 3 người dùng mới kết nối mỗi giây (số nguyên)
+      # (3 VUs/giây * 100 giây = 300 VUs tổng cộng)
+      name: "Livestream Chat Load Test for ~300 VUs"
   # Bỏ hoàn toàn 'environments' và 'payload' vì processor đã xử lý
 scenarios:
   - name: "Livestream Viewer Chat Scenario"
@@ -24,7 +26,7 @@ scenarios:
       - emit:
           channel: "join_stream_room"
           data:
-            streamId: 50 # ID của stream đang live
+            streamId: 52 # ID của stream đang live
       - think: 2 # Chờ 2 giây để tham gia phòng và nhận lịch sử chat
 
       # 3. Lặp lại việc gửi tin nhắn chat
@@ -32,7 +34,7 @@ scenarios:
           - emit:
               channel: "chat_message"
               data:
-                streamId: 50 # ID của stream
+                streamId: 52 # ID của stream
                 message: "{{ message_content }}" # <-- Lấy từ processor
                 artilleryUsername: "{{ username }}" # <-- Lấy từ processor
           - think: 5 # Chờ 5 giây trước khi gửi tin nhắn tiếp theo

@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 // Đọc và phân tích file CSV chỉ một lần khi script bắt đầu
 const users = fs
-  .readFileSync(path.join(__dirname, "users.csv"), "utf8")
+  .readFileSync(path.join(__dirname, "users2.csv"), "utf8")
   .split("\n") // Tách file thành các dòng
   .slice(1) // Bỏ qua dòng header
   .filter((line) => line.trim() !== "") // Bỏ qua các dòng trống
